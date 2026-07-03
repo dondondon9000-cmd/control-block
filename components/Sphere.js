@@ -59,17 +59,25 @@ const VERTEX_SHADER = `
   uniform float uIntensity;
   uniform float uSpeed;
   varying float vDisplacement;
-  varying vec3 vNormal;
+  varying vec3 vNormalW;
+  varying vec3 vViewDir;
 
   ${NOISE_GLSL}
 
   void main() {
-    vNormal = normal;
-    float noise = snoise(position * 1.6 + uTime * uSpeed);
+    vec3 objectNormal = normalize(normal);
+    float noiseCoarse = snoise(position * 3.2 + uTime * uSpeed);
+    float noiseFine = snoise(position * 8.0 - uTime * uSpeed * 0.6);
+    float noise = noiseCoarse * 0.65 + noiseFine * 0.35;
     float displacement = noise * uIntensity;
     vDisplacement = displacement;
-    vec3 newPosition = position + normal * displacement;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(newPosition, 1.0);
+    vec3 displaced = position + objectNormal * displacement;
+
+    vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
+    vNormalW = normalize(mat3(modelMatrix) * objectNormal);
+    vViewDir = normalize(cameraPosition - worldPosition.xyz);
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(displaced, 1.0);
   }
 `;
 
@@ -77,13 +85,18 @@ const FRAGMENT_SHADER = `
   uniform vec3 uColorA;
   uniform vec3 uColorB;
   varying float vDisplacement;
-  varying vec3 vNormal;
+  varying vec3 vNormalW;
+  varying vec3 vViewDir;
 
   void main() {
-    float mixFactor = clamp(vDisplacement * 2.0 + 0.5, 0.0, 1.0);
-    vec3 color = mix(uColorA, uColorB, mixFactor);
-    float rim = pow(1.0 - abs(vNormal.z), 2.0);
-    color += rim * 0.4;
+    float mixFactor = clamp(vDisplacement * 4.0 + 0.5, 0.0, 1.0);
+    vec3 base = mix(uColorA, uColorB, mixFactor);
+
+    float facing = max(dot(vNormalW, vViewDir), 0.0);
+    float fresnel = pow(1.0 - facing, 2.2);
+    float core = pow(facing, 3.0);
+
+    vec3 color = base * (0.5 + core * 0.9) + fresnel * vec3(0.55, 0.85, 1.0) * 1.15;
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -103,15 +116,82 @@ function makeMaterial() {
 }
 
 const PRESETS = {
-  idle: { intensity: 0.12, speed: 0.12, colorA: '#0891b2', colorB: '#38bdf8' },
-  listening: { intensity: 0.32, speed: 0.45, colorA: '#22d3ee', colorB: '#818cf8' },
-  thinking: { intensity: 0.4, speed: 1.3, colorA: '#a78bfa', colorB: '#f472b6' },
-  speaking: { intensity: 0.3, speed: 0.6, colorA: '#34d399', colorB: '#22d3ee' },
+  idle: { intensity: 0.045, speed: 0.12, colorA: '#0891b2', colorB: '#38bdf8', bolts: 0.28 },
+  listening: { intensity: 0.075, speed: 0.45, colorA: '#22d3ee', colorB: '#818cf8', bolts: 0.6 },
+  thinking: { intensity: 0.11, speed: 1.3, colorA: '#a78bfa', colorB: '#f472b6', bolts: 0.9 },
+  speaking: { intensity: 0.065, speed: 0.6, colorA: '#34d399', colorB: '#22d3ee', bolts: 0.55 },
 };
+
+function randomDirection() {
+  const u = Math.random();
+  const v = Math.random();
+  const theta = 2 * Math.PI * u;
+  const phi = Math.acos(2 * v - 1);
+  return new THREE.Vector3(Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi));
+}
+
+function buildBoltPoints(origin, direction, length, segments = 6, jitter = 0.16) {
+  const end = origin.clone().addScaledVector(direction, length);
+  const points = [];
+  for (let i = 0; i <= segments; i++) {
+    const t = i / segments;
+    const p = origin.clone().lerp(end, t);
+    if (i !== 0 && i !== segments) {
+      p.x += (Math.random() - 0.5) * jitter;
+      p.y += (Math.random() - 0.5) * jitter;
+      p.z += (Math.random() - 0.5) * jitter;
+    }
+    points.push(p);
+  }
+  return points;
+}
+
+function LightningBolt({ colorHex, intensityRef }) {
+  const lineRef = useRef();
+  const geometry = useMemo(() => new THREE.BufferGeometry(), []);
+  const material = useMemo(
+    () => new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.3 }),
+    [colorHex]
+  );
+  const directionRef = useRef(randomDirection());
+  const originRef = useRef(directionRef.current.clone().multiplyScalar(1.05));
+  const nextRegenRef = useRef(0);
+
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    const boltIntensity = intensityRef.current;
+
+    if (t > nextRegenRef.current) {
+      nextRegenRef.current = t + 0.12 + Math.random() * 0.3;
+      const length = 0.35 + Math.random() * (0.5 + boltIntensity * 1.4);
+      const points = buildBoltPoints(originRef.current, directionRef.current, length);
+      geometry.setFromPoints(points);
+    }
+
+    material.opacity = boltIntensity < 0.05 ? 0 : (0.15 + Math.random() * 0.45) * Math.min(1, boltIntensity * 1.6);
+  });
+
+  return <line ref={lineRef} geometry={geometry} material={material} />;
+}
+
+function LightningField({ intensityRef }) {
+  const bolts = useMemo(
+    () => Array.from({ length: 14 }, (_, i) => (i % 2 === 0 ? '#6ee7ff' : '#c084fc')),
+    []
+  );
+  return (
+    <group>
+      {bolts.map((colorHex, i) => (
+        <LightningBolt key={i} colorHex={colorHex} intensityRef={intensityRef} />
+      ))}
+    </group>
+  );
+}
 
 export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
   const meshRef = useRef();
   const glowRef = useRef();
+  const boltIntensityRef = useRef(0.18);
   const material = useMemo(() => makeMaterial(), []);
   const glowMaterial = useMemo(
     () =>
@@ -155,6 +235,8 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
     material.uniforms.uColorA.value.lerp(new THREE.Color(preset.colorA), 0.05);
     material.uniforms.uColorB.value.lerp(new THREE.Color(preset.colorB), 0.05);
 
+    boltIntensityRef.current = THREE.MathUtils.lerp(boltIntensityRef.current, preset.bolts * boost, 0.08);
+
     if (meshRef.current) {
       meshRef.current.rotation.y += delta * 0.08;
       meshRef.current.rotation.x += delta * 0.02;
@@ -185,6 +267,7 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
         </bufferGeometry>
         <pointsMaterial size={0.02} color="#a5f3fc" transparent opacity={0.6} sizeAttenuation />
       </points>
+      <LightningField intensityRef={boltIntensityRef} />
     </group>
   );
 }
