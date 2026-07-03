@@ -34,13 +34,19 @@ function TalkPageInner() {
   const amplitudeIntervalRef = useRef(null);
   const scrollRef = useRef(null);
   const speakingTimeoutRef = useRef(null);
+  const transcriptRef = useRef('');
+  const sendMessageRef = useRef(() => {});
 
   useEffect(() => {
     const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
     if (SR) {
       setSpeechSupported(true);
       const recognition = new SR();
-      recognition.continuous = true;
+      // continuous = false lets the browser auto-detect when the user stops
+      // talking and end the recognition on its own — that's what makes this
+      // "push to talk, then it just sends" instead of "push to talk, then
+      // stop, then send."
+      recognition.continuous = false;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
 
@@ -49,10 +55,25 @@ function TalkPageInner() {
         for (let i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
         }
+        transcriptRef.current = transcript;
         setInput(transcript);
       };
       recognition.onend = () => {
+        clearInterval(amplitudeIntervalRef.current);
         setRecording(false);
+        setAmplitude(0);
+        const finalText = transcriptRef.current.trim();
+        transcriptRef.current = '';
+        if (finalText) {
+          sendMessageRef.current(null, finalText);
+        } else {
+          setSphereState('idle');
+        }
+      };
+      recognition.onerror = () => {
+        clearInterval(amplitudeIntervalRef.current);
+        setRecording(false);
+        setAmplitude(0);
         setSphereState('idle');
       };
       recognitionRef.current = recognition;
@@ -74,11 +95,12 @@ function TalkPageInner() {
   function toggleRecording() {
     if (!speechSupported) return;
     if (recording) {
+      // Manual cancel — stop now. onend will fire; if nothing was
+      // transcribed yet it just goes back to idle instead of sending.
       recognitionRef.current.stop();
-      clearInterval(amplitudeIntervalRef.current);
-      setAmplitude(0);
       return;
     }
+    transcriptRef.current = '';
     setInput('');
     setSphereState('listening');
     setRecording(true);
@@ -88,9 +110,9 @@ function TalkPageInner() {
     }, 180);
   }
 
-  async function sendMessage(e) {
+  async function sendMessage(e, overrideText) {
     e?.preventDefault();
-    const text = input.trim();
+    const text = (overrideText ?? input).trim();
     if (!text || sending) return;
 
     if (recording) {
@@ -138,6 +160,8 @@ function TalkPageInner() {
     }
   }
 
+  sendMessageRef.current = sendMessage;
+
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -180,13 +204,14 @@ function TalkPageInner() {
           <button
             type="button"
             onClick={toggleRecording}
+            title={recording ? 'Tap to cancel' : 'Tap and talk — sends automatically when you stop'}
             className={`shrink-0 rounded-full border px-4 py-3 text-sm transition ${
               recording
-                ? 'border-alert/50 bg-alert/10 text-alert'
+                ? 'animate-pulse border-alert/50 bg-alert/10 text-alert'
                 : 'border-white/10 bg-panel text-slate-300 hover:border-neuron/40 hover:text-neuron'
             }`}
           >
-            {recording ? 'Stop' : 'Voice'}
+            {recording ? 'Listening…' : '🎙 Talk'}
           </button>
         )}
         <textarea
