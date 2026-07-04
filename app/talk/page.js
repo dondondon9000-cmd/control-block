@@ -38,6 +38,11 @@ function TalkPageInner() {
   const [error, setError] = useState('');
   const [recording, setRecording] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [speechSynthesisAvailable, setSpeechSynthesisAvailable] = useState(false);
+  const [voices, setVoices] = useState([]);
+  const [voiceURI, setVoiceURI] = useState('');
+  const [speechRate, setSpeechRate] = useState(1);
+  const [showVoiceSettings, setShowVoiceSettings] = useState(false);
 
   const recognitionRef = useRef(null);
   const amplitudeIntervalRef = useRef(null);
@@ -49,13 +54,47 @@ function TalkPageInner() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    setSpeechSynthesisAvailable(true);
+    const savedVoiceURI = localStorage.getItem('controlblock:voiceURI') || '';
+    const savedRate = parseFloat(localStorage.getItem('controlblock:speechRate'));
+    if (!Number.isNaN(savedRate)) setSpeechRate(savedRate);
+
     const loadVoices = () => {
-      voicesRef.current = window.speechSynthesis.getVoices();
+      const list = window.speechSynthesis.getVoices();
+      voicesRef.current = list;
+      setVoices(list);
+      setVoiceURI((current) => {
+        if (current && list.some((v) => v.voiceURI === current)) return current;
+        if (savedVoiceURI && list.some((v) => v.voiceURI === savedVoiceURI)) return savedVoiceURI;
+        // Desktop Chrome ships a named "Google UK English Male" voice; Android's
+        // TTS engine doesn't label gender the same way, so this falls back
+        // through looser en-GB / en matches to find the closest thing available.
+        const preferred =
+          list.find((v) => v.name === 'Google UK English Male') ||
+          list.find((v) => /uk/i.test(v.name) && /male/i.test(v.name)) ||
+          list.find((v) => v.lang === 'en-GB' && !/female/i.test(v.name)) ||
+          list.find((v) => v.lang?.startsWith('en-GB')) ||
+          list.find((v) => v.lang?.startsWith('en')) ||
+          list[0];
+        return preferred ? preferred.voiceURI : '';
+      });
     };
     loadVoices();
     window.speechSynthesis.onvoiceschanged = loadVoices;
     return () => window.speechSynthesis.cancel();
   }, []);
+
+  function handleVoiceChange(e) {
+    const next = e.target.value;
+    setVoiceURI(next);
+    if (next) localStorage.setItem('controlblock:voiceURI', next);
+  }
+
+  function handleRateChange(e) {
+    const next = parseFloat(e.target.value);
+    setSpeechRate(next);
+    localStorage.setItem('controlblock:speechRate', String(next));
+  }
 
   function speak(text) {
     if (typeof window === 'undefined' || !window.speechSynthesis) {
@@ -67,13 +106,10 @@ function TalkPageInner() {
     }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
-    const voices = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
-    const preferred =
-      voices.find((v) => v.name === 'Google UK English Male') ||
-      voices.find((v) => v.name.startsWith('Google UK English')) ||
-      voices.find((v) => v.lang === 'en-GB') ||
-      null;
-    if (preferred) utterance.voice = preferred;
+    const list = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
+    const selected = list.find((v) => v.voiceURI === voiceURI);
+    if (selected) utterance.voice = selected;
+    utterance.rate = speechRate;
     utterance.onstart = () => setSphereState('speaking');
     utterance.onend = () => setSphereState('idle');
     utterance.onerror = () => setSphereState('idle');
@@ -253,7 +289,53 @@ function TalkPageInner() {
             <span className="capitalize text-slate-300">{emotion}</span>
           </div>
         )}
+        {speechSynthesisAvailable && (
+          <button
+            type="button"
+            onClick={() => setShowVoiceSettings((v) => !v)}
+            title="Voice settings"
+            className={`glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs transition ${
+              showVoiceSettings ? 'text-neuron' : 'text-slate-300 hover:text-neuron'
+            }`}
+          >
+            <span>🔊</span>
+            <span>Voice</span>
+          </button>
+        )}
       </div>
+
+      {showVoiceSettings && speechSynthesisAvailable && (
+        <div className="px-4 pt-2 lg:flex lg:justify-end lg:px-8">
+          <div className="glass-panel mx-auto flex w-full max-w-sm flex-col gap-3 rounded-2xl px-4 py-3 text-xs lg:mx-0">
+            <label className="flex flex-col gap-1">
+              <span className="text-slate-400">Voice</span>
+              <select
+                value={voiceURI}
+                onChange={handleVoiceChange}
+                className="rounded-lg border border-white/10 bg-panel/80 px-2 py-1.5 text-slate-200 outline-none focus:border-neuron2/50"
+              >
+                {voices.map((v) => (
+                  <option key={v.voiceURI} value={v.voiceURI}>
+                    {v.name} ({v.lang})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-slate-400">Speed — {speechRate.toFixed(2)}x</span>
+              <input
+                type="range"
+                min="0.5"
+                max="1.75"
+                step="0.05"
+                value={speechRate}
+                onChange={handleRateChange}
+                className="accent-neuron2"
+              />
+            </label>
+          </div>
+        </div>
+      )}
 
       <div className="relative flex h-[42vh] shrink-0 items-center justify-center lg:h-[48vh]">
         <Suspense fallback={<div className="h-64 w-64 rounded-full bg-neuron/10" />}>
