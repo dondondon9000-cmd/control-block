@@ -399,7 +399,7 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
     }
     if (glowRef.current) {
       const pulse = 1 + Math.sin(material.uniforms.uTime.value * 1.2) * 0.05 * boost;
-      glowRef.current.scale.set(3.4 * pulse, 3.4 * pulse, 1);
+      glowRef.current.scale.set(1.9 * pulse, 1.9 * pulse, 1);
       glowRef.current.material.opacity = THREE.MathUtils.lerp(
         glowRef.current.material.opacity,
         0.22 + boost * 0.1,
@@ -413,7 +413,7 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
       <mesh ref={meshRef} material={material}>
         <icosahedronGeometry args={[1, 64]} />
       </mesh>
-      <sprite ref={glowRef} scale={[3.4, 3.4, 1]}>
+      <sprite ref={glowRef} scale={[1.9, 1.9, 1]}>
         <spriteMaterial
           map={glowTexture}
           transparent
