@@ -99,6 +99,10 @@ export default function SideNav() {
 
   if (pathname === '/login' || pathname === '/onboarding') return null;
 
+  // The Talk page has its own big hero sphere, so the small sidebar
+  // version would just be a redundant duplicate there.
+  const showSidebarSphere = pathname !== '/talk';
+
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
@@ -118,22 +122,24 @@ export default function SideNav() {
         </span>
       </Link>
 
-      <div className="mb-4 flex flex-col items-center gap-2 rounded-2xl border border-white/5 bg-black py-6">
-        <SphereCanvas state={sphereState} amplitude={amplitude} className="h-44 w-44" />
-        <div className="glass-panel flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px]">
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: sphereState === 'idle' ? '#64748b' : '#6ee7ff' }}
-          />
-          <span className="text-slate-300">{STATUS_TEXT[sphereState]}</span>
-        </div>
-        {emotion && (
+      {showSidebarSphere && (
+        <div className="mb-4 flex flex-col items-center gap-2 rounded-2xl border border-white/5 bg-black py-6">
+          <SphereCanvas state={sphereState} amplitude={amplitude} className="h-44 w-44" />
           <div className="glass-panel flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px]">
-            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: emotionColor(emotion) }} />
-            <span className="capitalize text-slate-300">{emotion}</span>
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ backgroundColor: sphereState === 'idle' ? '#64748b' : '#6ee7ff' }}
+            />
+            <span className="text-slate-300">{STATUS_TEXT[sphereState]}</span>
           </div>
-        )}
-      </div>
+          {emotion && (
+            <div className="glass-panel flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px]">
+              <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: emotionColor(emotion) }} />
+              <span className="capitalize text-slate-300">{emotion}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       <nav className="flex-1 space-y-1">
         {NAV_ITEMS.map((item) => {

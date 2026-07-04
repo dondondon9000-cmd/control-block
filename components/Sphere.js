@@ -160,11 +160,11 @@ const FRAGMENT_SHADER = `
     // palette, brightness driven by uVeinPulse (a heartbeat waveform
     // computed on the JS side), so the sphere reads as something with a
     // pulse rather than a static texture.
-    vec2 vor = voronoi(vObjectPos * 2.6 + uTime * 0.015);
+    vec2 vor = voronoi(vObjectPos * 1.5 + uTime * 0.015);
     float edge = vor.y - vor.x;
-    float veinMask = 1.0 - smoothstep(0.0, 0.055, edge);
-    vec3 veinColor = mix(uColorA, uColorB, 0.5) * 2.0 + vec3(0.15, 0.25, 0.3);
-    color = mix(color, veinColor, veinMask * clamp(uVeinPulse, 0.0, 1.0));
+    float veinMask = 1.0 - smoothstep(0.0, 0.02, edge);
+    vec3 veinColor = mix(uColorA, uColorB, 0.5) * 1.6 + vec3(0.1, 0.18, 0.22);
+    color = mix(color, veinColor, veinMask * clamp(uVeinPulse, 0.0, 0.85));
 
     gl_FragColor = vec4(color, 1.0);
   }
