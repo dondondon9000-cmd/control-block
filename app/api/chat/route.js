@@ -40,7 +40,11 @@ export async function POST(req) {
   // Both run against fast indexed queries — pulled in parallel so the past-
   // entry search never adds a serial round trip to a normal chat turn.
   const [history, pastEntries] = await Promise.all([
-    sql`SELECT role, content FROM messages WHERE conversation_id = ${convId} ORDER BY id ASC LIMIT ${HISTORY_LIMIT}`,
+    sql`
+      SELECT role, content FROM (
+        SELECT role, content, id FROM messages WHERE conversation_id = ${convId} ORDER BY id DESC LIMIT ${HISTORY_LIMIT}
+      ) recent ORDER BY id ASC
+    `,
     searchJournal(message, { excludeConversationId: convId, limit: 5 }),
   ]);
 
