@@ -31,6 +31,23 @@ export default function ReflectionSummary({ content, kind }) {
           <Section title="Long-term patterns" items={content.longTermPatterns} />
           <Section title="Goal progress" items={content.goalProgress} />
           <Section title="Possible blind spots" items={content.blindSpots} />
+          {content.visionStillFits === false && content.updatedVision && (
+            <div className="rounded-xl border border-neuron2/30 bg-neuron2/10 p-3">
+              <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-neuron2">
+                Your plan evolved this month
+              </p>
+              <p className="text-sm text-slate-200">{content.updatedVision}</p>
+              {content.updatedPlanSteps?.length > 0 && (
+                <ul className="mt-2 space-y-1">
+                  {content.updatedPlanSteps.map((step, i) => (
+                    <li key={i} className="text-sm text-slate-300">
+                      • {step}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>

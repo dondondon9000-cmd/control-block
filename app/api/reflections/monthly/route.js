@@ -3,6 +3,7 @@ import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { PERIOD_SUMMARY_TOOL, periodSummarySystemPrompt } from '@/lib/prompts';
 import { startOfMonth, endOfMonth } from '@/lib/dateUtils';
+import { getProfile } from '@/lib/planContext';
 
 function resolveMonth(yearParam, monthParam) {
   const now = new Date();
@@ -48,11 +49,21 @@ export async function POST(req) {
     .map((m) => `[${m.created_at.slice(0, 10)}]${m.emotion ? ` (${m.emotion})` : ''} ${m.content}`)
     .join('\n');
 
+  const profile = await getProfile();
+  const planBlock = profile?.future_vision
+    ? `\n\nTheir currently stated future vision: "${profile.future_vision}"\nObstacles they named: "${profile.obstacles || '(none stated)'}"\nCurrent growth plan steps: ${profile.growth_plan || '[]'}`
+    : '\n\n(No future vision has been set yet — leave visionStillFits true and the update fields empty.)';
+
   let result;
   try {
     result = await callWithTool({
       system: periodSummarySystemPrompt('monthly'),
-      messages: [{ role: 'user', content: `Journal entries for ${year}-${String(month).padStart(2, '0')}:\n\n${transcript}` }],
+      messages: [
+        {
+          role: 'user',
+          content: `Journal entries for ${year}-${String(month).padStart(2, '0')}:\n\n${transcript}${planBlock}`,
+        },
+      ],
       tool: PERIOD_SUMMARY_TOOL,
       maxTokens: 1600,
     });
@@ -66,6 +77,19 @@ export async function POST(req) {
     VALUES (${year}, ${month}, ${JSON.stringify(result)}, ${now})
     ON CONFLICT (year, month) DO UPDATE SET content = excluded.content, created_at = excluded.created_at
   `;
+
+  // The plan only evolves when the model finds real, sustained evidence of a
+  // shift (see periodSummarySystemPrompt) — a single hard week never rewrites
+  // it, and no vision means there's nothing to revise yet.
+  if (profile?.future_vision && result.visionStillFits === false && result.updatedVision) {
+    await sql`
+      UPDATE profile
+      SET future_vision = ${result.updatedVision},
+          obstacles = ${result.updatedObstacles || profile.obstacles},
+          growth_plan = ${JSON.stringify(result.updatedPlanSteps?.length ? result.updatedPlanSteps : JSON.parse(profile.growth_plan || '[]'))}
+      WHERE id = 1
+    `;
+  }
 
   return NextResponse.json({ year, month, content: result });
 }

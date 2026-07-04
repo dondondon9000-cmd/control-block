@@ -121,7 +121,16 @@ function LogoutIcon() {
   );
 }
 
-function SidebarBody({ pathname, showSidebarSphere, sphereState, amplitude, emotion, onLogout, onNavigate }) {
+function SidebarBody({
+  pathname,
+  showSidebarSphere,
+  sphereState,
+  amplitude,
+  emotion,
+  onLogout,
+  onResetOnboarding,
+  onNavigate,
+}) {
   return (
     <>
       <Link href="/talk" onClick={onNavigate} className="mb-4 flex items-center gap-3 px-2">
@@ -191,6 +200,12 @@ function SidebarBody({ pathname, showSidebarSphere, sphereState, amplitude, emot
           </span>
         </div>
         <button
+          onClick={onResetOnboarding}
+          className="w-full rounded-xl px-3 py-2 text-left text-xs text-slate-600 transition hover:bg-white/5 hover:text-neuron2"
+        >
+          Redo onboarding
+        </button>
+        <button
           onClick={onLogout}
           className="w-full rounded-xl px-3 py-2 text-left text-xs text-slate-600 transition hover:bg-white/5 hover:text-alert"
         >
@@ -216,6 +231,14 @@ export default function SideNav() {
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
     router.push('/login');
+  }
+
+  async function resetOnboarding() {
+    if (!window.confirm('This clears your current future vision, obstacles, and growth plan so you can redo onboarding from scratch. Your journal history is not affected. Continue?')) {
+      return;
+    }
+    await fetch('/api/profile/reset', { method: 'POST' });
+    router.push('/onboarding');
   }
 
   return (
@@ -255,6 +278,7 @@ export default function SideNav() {
               amplitude={amplitude}
               emotion={emotion}
               onLogout={logout}
+              onResetOnboarding={resetOnboarding}
               onNavigate={() => setDrawerOpen(false)}
             />
           </aside>
@@ -270,6 +294,7 @@ export default function SideNav() {
           amplitude={amplitude}
           emotion={emotion}
           onLogout={logout}
+          onResetOnboarding={resetOnboarding}
         />
       </aside>
     </>
