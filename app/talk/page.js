@@ -42,9 +42,42 @@ function TalkPageInner() {
   const recognitionRef = useRef(null);
   const amplitudeIntervalRef = useRef(null);
   const scrollRef = useRef(null);
-  const speakingTimeoutRef = useRef(null);
   const transcriptRef = useRef('');
   const sendMessageRef = useRef(() => {});
+  const voicesRef = useRef([]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    const loadVoices = () => {
+      voicesRef.current = window.speechSynthesis.getVoices();
+    };
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    return () => window.speechSynthesis.cancel();
+  }, []);
+
+  function speak(text) {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      // No speech synthesis available — still flash "speaking" briefly so
+      // the sphere doesn't stay stuck on "thinking" forever.
+      setSphereState('speaking');
+      setTimeout(() => setSphereState('idle'), 1800);
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
+    const preferred =
+      voices.find((v) => v.name === 'Google UK English Male') ||
+      voices.find((v) => v.name.startsWith('Google UK English')) ||
+      voices.find((v) => v.lang === 'en-GB') ||
+      null;
+    if (preferred) utterance.voice = preferred;
+    utterance.onstart = () => setSphereState('speaking');
+    utterance.onend = () => setSphereState('idle');
+    utterance.onerror = () => setSphereState('idle');
+    window.speechSynthesis.speak(utterance);
+  }
 
   useEffect(() => {
     const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -113,6 +146,7 @@ function TalkPageInner() {
       recognitionRef.current.stop();
       return;
     }
+    window.speechSynthesis?.cancel();
     transcriptRef.current = '';
     setInput('');
     setSphereState('listening');
@@ -164,9 +198,7 @@ function TalkPageInner() {
         router.replace(`/talk?c=${data.conversationId}`);
       }
 
-      setSphereState('speaking');
-      clearTimeout(speakingTimeoutRef.current);
-      speakingTimeoutRef.current = setTimeout(() => setSphereState('idle'), 2200);
+      speak(data.reply);
     } catch (err) {
       setError(err.message);
       setSphereState('idle');
