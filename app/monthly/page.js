@@ -44,12 +44,12 @@ export default function MonthlyPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-xl font-semibold text-slate-100">Monthly Reflection</h1>
         <button
           onClick={generate}
           disabled={generating}
-          className="rounded-lg bg-neuron/90 px-4 py-2 text-sm font-medium text-void transition hover:bg-neuron disabled:opacity-50"
+          className="shrink-0 rounded-lg bg-neuron/90 px-4 py-2 text-sm font-medium text-void transition hover:bg-neuron disabled:opacity-50"
         >
           {generating ? 'Generating…' : data.current ? 'Regenerate' : 'Generate this month'}
         </button>

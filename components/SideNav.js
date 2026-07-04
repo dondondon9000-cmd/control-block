@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
@@ -92,25 +93,38 @@ function NavIcon({ children }) {
   );
 }
 
-export default function SideNav() {
-  const pathname = usePathname();
-  const router = useRouter();
-  const { sphereState, amplitude, emotion } = useSphere();
-
-  if (pathname === '/login' || pathname === '/onboarding') return null;
-
-  // The Talk page has its own big hero sphere, so the small sidebar
-  // version would just be a redundant duplicate there.
-  const showSidebarSphere = pathname !== '/talk';
-
-  async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
-  }
-
+function MenuIcon() {
   return (
-    <aside className="flex h-screen w-80 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur">
-      <Link href="/talk" className="mb-4 flex items-center gap-3 px-2">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M6 6l12 12M18 6L6 18" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function LogoutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path
+        d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SidebarBody({ pathname, showSidebarSphere, sphereState, amplitude, emotion, onLogout, onNavigate }) {
+  return (
+    <>
+      <Link href="/talk" onClick={onNavigate} className="mb-4 flex items-center gap-3 px-2">
         <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-neuron to-neuron2 shadow-glow">
           <span className="h-3 w-3 rounded-full bg-void" />
         </span>
@@ -148,6 +162,7 @@ export default function SideNav() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onNavigate}
               className={`flex items-center gap-3 rounded-xl px-3 py-2.5 transition ${
                 active
                   ? 'border border-neuron2/30 bg-gradient-to-r from-neuron/10 to-neuron2/10 text-neuron shadow-glow'
@@ -176,12 +191,112 @@ export default function SideNav() {
           </span>
         </div>
         <button
-          onClick={logout}
+          onClick={onLogout}
           className="w-full rounded-xl px-3 py-2 text-left text-xs text-slate-600 transition hover:bg-white/5 hover:text-alert"
         >
           Sign out
         </button>
       </div>
-    </aside>
+    </>
+  );
+}
+
+export default function SideNav() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { sphereState, amplitude, emotion } = useSphere();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  if (pathname === '/login' || pathname === '/onboarding') return null;
+
+  // The Talk page has its own big hero sphere, so the small sidebar
+  // version would just be a redundant duplicate there.
+  const showSidebarSphere = pathname !== '/talk';
+
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  }
+
+  return (
+    <>
+      {/* Mobile top bar — sits in normal document flow (not fixed), so the
+          layout's flex-col chain sizes everything without needing manual
+          padding to avoid overlapping content. */}
+      <header className="flex shrink-0 items-center justify-between border-b border-white/5 bg-panel/80 px-4 py-3 backdrop-blur lg:hidden">
+        <button onClick={() => setDrawerOpen(true)} aria-label="Open menu" className="p-1 text-slate-300">
+          <MenuIcon />
+        </button>
+        <Link href="/talk" className="flex items-center gap-2">
+          <span className="h-6 w-6 rounded-full bg-gradient-to-br from-neuron to-neuron2 shadow-glow" />
+          <span className="text-xs font-bold tracking-wide text-slate-100">CONTROL BLOCK</span>
+        </Link>
+        <button onClick={logout} aria-label="Sign out" className="p-1 text-slate-500">
+          <LogoutIcon />
+        </button>
+      </header>
+
+      {/* Mobile slide-in drawer with the full nav */}
+      {drawerOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div className="absolute inset-0 bg-black/60" onClick={() => setDrawerOpen(false)} />
+          <aside className="relative flex h-full w-72 max-w-[85vw] flex-col overflow-y-auto bg-panel px-4 py-6 shadow-2xl">
+            <button
+              onClick={() => setDrawerOpen(false)}
+              aria-label="Close menu"
+              className="absolute right-3 top-3 p-1 text-slate-400"
+            >
+              <CloseIcon />
+            </button>
+            <SidebarBody
+              pathname={pathname}
+              showSidebarSphere={showSidebarSphere}
+              sphereState={sphereState}
+              amplitude={amplitude}
+              emotion={emotion}
+              onLogout={logout}
+              onNavigate={() => setDrawerOpen(false)}
+            />
+          </aside>
+        </div>
+      )}
+
+      {/* Desktop sidebar — identical to the original design, just hidden below lg */}
+      <aside className="hidden h-screen w-80 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur lg:flex">
+        <SidebarBody
+          pathname={pathname}
+          showSidebarSphere={showSidebarSphere}
+          sphereState={sphereState}
+          amplitude={amplitude}
+          emotion={emotion}
+          onLogout={logout}
+        />
+      </aside>
+    </>
+  );
+}
+
+export function MobileBottomNav() {
+  const pathname = usePathname();
+  if (pathname === '/login' || pathname === '/onboarding') return null;
+
+  return (
+    <nav className="flex shrink-0 items-center justify-around border-t border-white/5 bg-panel/90 py-2 backdrop-blur lg:hidden">
+      {NAV_ITEMS.map((item) => {
+        const active = pathname.startsWith(item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            aria-label={item.label}
+            className={`flex flex-col items-center gap-0.5 rounded-lg px-3 py-1.5 ${
+              active ? 'text-neuron' : 'text-slate-500'
+            }`}
+          >
+            <NavIcon>{item.icon}</NavIcon>
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

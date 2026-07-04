@@ -45,6 +45,7 @@ function TalkPageInner() {
   const transcriptRef = useRef('');
   const sendMessageRef = useRef(() => {});
   const voicesRef = useRef([]);
+  const hasScrolledOnceRef = useRef(false);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -139,11 +140,22 @@ function TalkPageInner() {
     // can race ahead of the browser laying out a big batch of new message
     // nodes (e.g. loading a long historical conversation all at once),
     // landing the scroll partway through instead of at the true bottom.
+    // The very first scroll for a conversation snaps instantly (a smooth
+    // animation over a long historical thread can take a visible moment to
+    // reach the bottom); every scroll after that — new messages arriving
+    // during live chat — animates smoothly.
+    if (messages.length === 0) return;
+    const behavior = hasScrolledOnceRef.current ? 'smooth' : 'auto';
     const raf = requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior });
+      hasScrolledOnceRef.current = true;
     });
     return () => cancelAnimationFrame(raf);
   }, [messages, sending]);
+
+  useEffect(() => {
+    hasScrolledOnceRef.current = false;
+  }, [conversationId]);
 
   function toggleRecording() {
     if (!speechSupported) return;
@@ -226,8 +238,8 @@ function TalkPageInner() {
   const showEmptyState = messages.length === 0;
 
   return (
-    <div className="flex h-screen flex-col">
-      <div className="flex items-center justify-end gap-2 px-8 pt-6">
+    <div className="flex h-full flex-col">
+      <div className="flex flex-wrap items-center justify-center gap-2 px-4 pt-4 lg:justify-end lg:px-8 lg:pt-6">
         <div className="glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs">
           <span
             className="h-2 w-2 rounded-full"
@@ -243,12 +255,18 @@ function TalkPageInner() {
         )}
       </div>
 
-      <div className="relative flex h-[48vh] shrink-0 items-center justify-center">
+      <div className="relative flex h-[42vh] shrink-0 items-center justify-center lg:h-[48vh]">
         <Suspense fallback={<div className="h-64 w-64 rounded-full bg-neuron/10" />}>
           <SphereCanvas
             state={sphereState}
             amplitude={amplitude}
-            className="aspect-square h-full max-h-[560px] max-w-[560px]"
+            // Mobile: width-driven and capped so it can never be wider than
+            // the viewport (the old height-driven sizing overflowed narrow
+            // screens since aspect-square + h-full made width follow the
+            // container's vh-based height regardless of how narrow the
+            // screen actually was). Desktop (lg:) is untouched — same
+            // height-driven sizing, same 560px cap, as before.
+            className="aspect-square w-[min(78vw,340px)] lg:h-full lg:w-auto lg:max-h-[560px] lg:max-w-[560px]"
           />
         </Suspense>
       </div>
