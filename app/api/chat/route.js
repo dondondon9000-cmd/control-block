@@ -3,6 +3,7 @@ import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { COMPANION_SYSTEM_PROMPT, JOURNAL_RESPONSE_TOOL } from '@/lib/prompts';
 import { searchJournal, formatMemoryContext } from '@/lib/journalSearch';
+import { getProfile, formatPlanContext } from '@/lib/planContext';
 
 const HISTORY_LIMIT = 24;
 
@@ -37,18 +38,20 @@ export async function POST(req) {
     }
   }
 
-  // Both run against fast indexed queries — pulled in parallel so the past-
-  // entry search never adds a serial round trip to a normal chat turn.
-  const [history, pastEntries] = await Promise.all([
+  // All three run against fast indexed/single-row queries — pulled in
+  // parallel so neither the past-entry search nor the profile lookup adds a
+  // serial round trip to a normal chat turn.
+  const [history, pastEntries, profile] = await Promise.all([
     sql`
       SELECT role, content FROM (
         SELECT role, content, id FROM messages WHERE conversation_id = ${convId} ORDER BY id DESC LIMIT ${HISTORY_LIMIT}
       ) recent ORDER BY id ASC
     `,
     searchJournal(message, { excludeConversationId: convId, limit: 5 }),
+    getProfile(),
   ]);
 
-  const system = COMPANION_SYSTEM_PROMPT + formatMemoryContext(pastEntries);
+  const system = COMPANION_SYSTEM_PROMPT + formatMemoryContext(pastEntries) + formatPlanContext(profile);
 
   let result;
   try {
