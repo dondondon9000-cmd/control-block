@@ -114,7 +114,7 @@ export default function SideNav() {
               href={item.href}
               className={`flex items-center gap-3 rounded-xl px-3 py-2.5 transition ${
                 active
-                  ? 'border border-neuron/30 bg-neuron/10 text-neuron shadow-glow'
+                  ? 'border border-neuron2/30 bg-gradient-to-r from-neuron/10 to-neuron2/10 text-neuron shadow-glow'
                   : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'
               }`}
             >

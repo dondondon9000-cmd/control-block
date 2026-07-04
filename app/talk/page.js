@@ -211,7 +211,7 @@ function TalkPageInner() {
         </Suspense>
       </div>
 
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-hidden px-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4">
         <div ref={scrollRef} className="scrollbar-thin flex-1 space-y-4 overflow-y-auto px-1 py-2">
           {showEmptyState && (
             <p className="mt-4 text-center text-sm text-slate-500">
@@ -245,7 +245,7 @@ function TalkPageInner() {
               className={`relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border text-xl transition ${
                 recording
                   ? 'border-alert/50 bg-alert/10 text-alert shadow-[0_0_25px_rgba(251,113,133,0.35)]'
-                  : 'border-neuron/30 bg-gradient-to-br from-neuron/20 to-neuron2/20 text-neuron shadow-glow hover:from-neuron/30 hover:to-neuron2/30'
+                  : 'border-neuron2/40 bg-gradient-to-br from-neuron/25 via-neuron2/15 to-neuron2/30 text-neuron shadow-glow hover:from-neuron/35 hover:to-neuron2/40'
               }`}
             >
               {recording ? (
@@ -269,12 +269,12 @@ function TalkPageInner() {
             onKeyDown={handleKeyDown}
             rows={1}
             placeholder={recording ? 'Listening…' : "What's on your mind..."}
-            className="glass-panel flex-1 resize-none rounded-2xl px-4 py-3 text-sm text-slate-100 outline-none focus:border-neuron/40"
+            className="glass-panel flex-1 resize-none rounded-2xl px-4 py-3 text-sm text-slate-100 outline-none focus:border-neuron2/50"
           />
           <button
             type="submit"
             disabled={sending || !input.trim()}
-            className="shrink-0 rounded-full bg-neuron/90 px-5 py-3 text-sm font-medium text-void transition hover:bg-neuron disabled:opacity-40"
+            className="shrink-0 rounded-full bg-gradient-to-br from-neuron to-neuron2 px-5 py-3 text-sm font-medium text-void transition hover:brightness-110 disabled:opacity-40"
           >
             Send
           </button>

@@ -130,53 +130,113 @@ function randomDirection() {
   return new THREE.Vector3(Math.sin(phi) * Math.cos(theta), Math.sin(phi) * Math.sin(theta), Math.cos(phi));
 }
 
-function buildBoltPoints(origin, direction, length, segments = 6, jitter = 0.16) {
-  const end = origin.clone().addScaledVector(direction, length);
-  const points = [];
-  for (let i = 0; i <= segments; i++) {
-    const t = i / segments;
-    const p = origin.clone().lerp(end, t);
-    if (i !== 0 && i !== segments) {
-      p.x += (Math.random() - 0.5) * jitter;
-      p.y += (Math.random() - 0.5) * jitter;
-      p.z += (Math.random() - 0.5) * jitter;
-    }
-    points.push(p);
+function randomPerpendicular(dir) {
+  const arbitrary = Math.abs(dir.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  return new THREE.Vector3().crossVectors(dir, arbitrary).normalize();
+}
+
+// Recursive midpoint displacement — real lightning is fractal (each segment
+// looks like a smaller version of the whole bolt), not a straight line with
+// jitter at fixed points, which is what made the old version read as fake.
+function subdivideBolt(p0, p1, roughness, depth, out) {
+  if (depth <= 0) {
+    out.push(p1.clone());
+    return;
   }
+  const dir = p1.clone().sub(p0);
+  const len = dir.length();
+  if (len < 1e-5) {
+    out.push(p1.clone());
+    return;
+  }
+  dir.normalize();
+  const mid = p0.clone().lerp(p1, 0.5);
+  const perp = randomPerpendicular(dir).applyAxisAngle(dir, Math.random() * Math.PI * 2);
+  mid.addScaledVector(perp, (Math.random() - 0.5) * len * roughness);
+  subdivideBolt(p0, mid, roughness * 0.62, depth - 1, out);
+  subdivideBolt(mid, p1, roughness * 0.62, depth - 1, out);
+}
+
+function buildFractalBolt(origin, direction, length, depth = 4, roughness = 0.55) {
+  const end = origin.clone().addScaledVector(direction, length);
+  const points = [origin.clone()];
+  subdivideBolt(origin, end, roughness, depth, points);
   return points;
 }
 
+function buildBranch(points) {
+  if (points.length < 4) return null;
+  const idx = 1 + Math.floor(Math.random() * (points.length - 3));
+  const start = points[idx];
+  const mainDir = points[idx + 1].clone().sub(points[idx - 1]).normalize();
+  const branchDir = randomPerpendicular(mainDir)
+    .applyAxisAngle(mainDir, Math.random() * Math.PI * 2)
+    .lerp(mainDir, 0.3)
+    .normalize();
+  const length = 0.15 + Math.random() * 0.22;
+  return buildFractalBolt(start, branchDir, length, 2, 0.6);
+}
+
+const BOLT_COLORS = ['#d8f7ff', '#ead9ff'];
+
 function LightningBolt({ colorHex, intensityRef }) {
-  const lineRef = useRef();
-  const geometry = useMemo(() => new THREE.BufferGeometry(), []);
-  const material = useMemo(
-    () => new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0.3 }),
+  const mainGeometry = useMemo(() => new THREE.BufferGeometry(), []);
+  const branchGeometry = useMemo(() => new THREE.BufferGeometry(), []);
+  const mainMaterial = useMemo(
+    () => new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0 }),
+    [colorHex]
+  );
+  const branchMaterial = useMemo(
+    () => new THREE.LineBasicMaterial({ color: colorHex, transparent: true, opacity: 0 }),
     [colorHex]
   );
   const directionRef = useRef(randomDirection());
   const originRef = useRef(directionRef.current.clone().multiplyScalar(1.05));
-  const nextRegenRef = useRef(0);
+  const nextStrikeRef = useRef(0);
+  const strikeStartRef = useRef(0);
+  const hasBranchRef = useRef(false);
 
   useFrame((state) => {
     const t = state.clock.elapsedTime;
     const boltIntensity = intensityRef.current;
 
-    if (t > nextRegenRef.current) {
-      nextRegenRef.current = t + 0.12 + Math.random() * 0.3;
-      const length = 0.35 + Math.random() * (0.5 + boltIntensity * 1.4);
-      const points = buildBoltPoints(originRef.current, directionRef.current, length);
-      geometry.setFromPoints(points);
+    if (t > nextStrikeRef.current) {
+      const gap = 0.25 + Math.random() * 0.9;
+      nextStrikeRef.current = t + gap / Math.max(0.25, boltIntensity * 2.2);
+      strikeStartRef.current = t;
+
+      const length = 0.4 + Math.random() * (0.5 + boltIntensity * 1.5);
+      const points = buildFractalBolt(originRef.current, directionRef.current, length);
+      mainGeometry.setFromPoints(points);
+
+      hasBranchRef.current = Math.random() < 0.55;
+      if (hasBranchRef.current) {
+        const branchPoints = buildBranch(points);
+        if (branchPoints) branchGeometry.setFromPoints(branchPoints);
+      }
     }
 
-    material.opacity = boltIntensity < 0.05 ? 0 : (0.15 + Math.random() * 0.45) * Math.min(1, boltIntensity * 1.6);
+    // Real lightning is a bright flash that quickly decays, not a smoothly
+    // flickering line — an exponential decay since the last strike gives
+    // that "snap then fade" read instead of random jitter.
+    const elapsed = t - strikeStartRef.current;
+    const decay = Math.exp(-elapsed * 7);
+    const flash = boltIntensity < 0.04 ? 0 : decay * Math.min(1, 0.4 + boltIntensity * 1.3);
+    mainMaterial.opacity = flash;
+    branchMaterial.opacity = hasBranchRef.current ? flash * 0.55 : 0;
   });
 
-  return <line ref={lineRef} geometry={geometry} material={material} />;
+  return (
+    <>
+      <line geometry={mainGeometry} material={mainMaterial} />
+      <line geometry={branchGeometry} material={branchMaterial} />
+    </>
+  );
 }
 
 function LightningField({ intensityRef }) {
   const bolts = useMemo(
-    () => Array.from({ length: 14 }, (_, i) => (i % 2 === 0 ? '#6ee7ff' : '#c084fc')),
+    () => Array.from({ length: 14 }, (_, i) => BOLT_COLORS[i % BOLT_COLORS.length]),
     []
   );
   return (
@@ -188,20 +248,30 @@ function LightningField({ intensityRef }) {
   );
 }
 
+function makeGlowTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  gradient.addColorStop(0, 'rgba(200, 230, 255, 0.45)');
+  gradient.addColorStop(0.4, 'rgba(160, 200, 255, 0.18)');
+  gradient.addColorStop(0.75, 'rgba(150, 170, 255, 0.05)');
+  gradient.addColorStop(1, 'rgba(150, 170, 255, 0)');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const boltIntensityRef = useRef(0.18);
   const material = useMemo(() => makeMaterial(), []);
-  const glowMaterial = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({
-        color: '#6ee7ff',
-        transparent: true,
-        opacity: 0.08,
-      }),
-    []
-  );
+  const glowTexture = useMemo(() => makeGlowTexture(), []);
 
   const particles = useMemo(() => {
     const count = 120;
@@ -242,9 +312,13 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
       meshRef.current.rotation.x += delta * 0.02;
     }
     if (glowRef.current) {
-      const scale = 1.15 + Math.sin(material.uniforms.uTime.value * 1.5) * 0.02 * boost;
-      glowRef.current.scale.setScalar(scale);
-      glowRef.current.rotation.y -= delta * 0.05;
+      const pulse = 1 + Math.sin(material.uniforms.uTime.value * 1.2) * 0.05 * boost;
+      glowRef.current.scale.set(3.4 * pulse, 3.4 * pulse, 1);
+      glowRef.current.material.opacity = THREE.MathUtils.lerp(
+        glowRef.current.material.opacity,
+        0.22 + boost * 0.1,
+        0.05
+      );
     }
   });
 
@@ -253,9 +327,15 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
       <mesh ref={meshRef} material={material}>
         <icosahedronGeometry args={[1, 64]} />
       </mesh>
-      <mesh ref={glowRef} material={glowMaterial} scale={1.15}>
-        <icosahedronGeometry args={[1, 16]} />
-      </mesh>
+      <sprite ref={glowRef} scale={[3.4, 3.4, 1]}>
+        <spriteMaterial
+          map={glowTexture}
+          transparent
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+          opacity={0.25}
+        />
+      </sprite>
       <points>
         <bufferGeometry>
           <bufferAttribute
