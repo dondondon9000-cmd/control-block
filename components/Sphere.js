@@ -61,6 +61,7 @@ const VERTEX_SHADER = `
   varying float vDisplacement;
   varying vec3 vNormalW;
   varying vec3 vViewDir;
+  varying vec3 vObjectPos;
 
   ${NOISE_GLSL}
 
@@ -71,6 +72,7 @@ const VERTEX_SHADER = `
     float noise = noiseCoarse * 0.65 + noiseFine * 0.35;
     float displacement = noise * uIntensity;
     vDisplacement = displacement;
+    vObjectPos = position;
     vec3 displaced = position + objectNormal * displacement;
 
     vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
@@ -81,22 +83,89 @@ const VERTEX_SHADER = `
   }
 `;
 
+// Cellular/Voronoi noise — cell-edge distances (F2 - F1) trace organic,
+// vein-like networks across the surface, which is what makes the "veins"
+// effect below look like a branching circulatory pattern instead of a
+// repeating tile pattern.
+const VORONOI_GLSL = `
+  vec3 hash3(vec3 p) {
+    p = vec3(
+      dot(p, vec3(127.1, 311.7, 74.7)),
+      dot(p, vec3(269.5, 183.3, 246.1)),
+      dot(p, vec3(113.5, 271.9, 124.6))
+    );
+    return fract(sin(p) * 43758.5453123);
+  }
+
+  vec2 voronoi(vec3 x) {
+    vec3 p = floor(x);
+    vec3 f = fract(x);
+    float f1 = 8.0;
+    float f2 = 8.0;
+    for (int k = -1; k <= 1; k++) {
+      for (int j = -1; j <= 1; j++) {
+        for (int i = -1; i <= 1; i++) {
+          vec3 g = vec3(float(i), float(j), float(k));
+          vec3 o = hash3(p + g);
+          vec3 r = g + o - f;
+          float d = dot(r, r);
+          if (d < f1) { f2 = f1; f1 = d; }
+          else if (d < f2) { f2 = d; }
+        }
+      }
+    }
+    return vec2(sqrt(f1), sqrt(f2));
+  }
+`;
+
 const FRAGMENT_SHADER = `
   uniform vec3 uColorA;
   uniform vec3 uColorB;
+  uniform float uVeinPulse;
+  uniform float uTime;
   varying float vDisplacement;
   varying vec3 vNormalW;
   varying vec3 vViewDir;
+  varying vec3 vObjectPos;
+
+  ${VORONOI_GLSL}
 
   void main() {
+    vec3 N = normalize(vNormalW);
+    vec3 V = normalize(vViewDir);
+
     float mixFactor = clamp(vDisplacement * 4.0 + 0.5, 0.0, 1.0);
     vec3 base = mix(uColorA, uColorB, mixFactor);
 
-    float facing = max(dot(vNormalW, vViewDir), 0.0);
-    float fresnel = pow(1.0 - facing, 2.2);
+    float facing = max(dot(N, V), 0.0);
+    float fresnel = pow(1.0 - facing, 2.3);
     float core = pow(facing, 3.0);
 
-    vec3 color = base * (0.5 + core * 0.9) + fresnel * vec3(0.55, 0.85, 1.0) * 1.15;
+    // Fake ambient occlusion from the displacement itself — recessed
+    // crevices read darker, raised ridges read brighter, so the bump
+    // texture reads as real depth instead of a flat color pattern.
+    float crevice = clamp(vDisplacement * 5.0, -1.0, 1.0) * 0.5 + 0.5;
+    float ao = mix(0.6, 1.0, crevice);
+
+    // Tight specular sheen from a fixed light direction — a glossy
+    // highlight that moves with rotation, reinforcing the 3D form.
+    vec3 lightDir = normalize(vec3(0.5, 0.7, 0.6));
+    vec3 halfDir = normalize(lightDir + V);
+    float spec = pow(max(dot(N, halfDir), 0.0), 42.0);
+
+    vec3 color = base * ao * (0.5 + core * 0.85) + fresnel * vec3(0.55, 0.85, 1.0) * 1.1;
+    color += spec * vec3(1.0) * 0.85;
+
+    // Pulsing veins — cell-edge Voronoi lines in the same electric
+    // palette, brightness driven by uVeinPulse (a heartbeat waveform
+    // computed on the JS side), so the sphere reads as something with a
+    // pulse rather than a static texture.
+    vec2 vor = voronoi(vObjectPos * 2.6 + uTime * 0.015);
+    float edge = vor.y - vor.x;
+    float veinMask = 1.0 - smoothstep(0.0, 0.055, edge);
+    vec3 veinColor = mix(uColorA, uColorB, 0.5) * 2.0 + vec3(0.15, 0.25, 0.3);
+    color = mix(color, veinColor, veinMask * clamp(uVeinPulse, 0.0, 1.0));
+
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -109,6 +178,7 @@ function makeMaterial() {
       uSpeed: { value: 0.15 },
       uColorA: { value: new THREE.Color('#0891b2') },
       uColorB: { value: new THREE.Color('#a78bfa') },
+      uVeinPulse: { value: 0.3 },
     },
     vertexShader: VERTEX_SHADER,
     fragmentShader: FRAGMENT_SHADER,
@@ -116,11 +186,20 @@ function makeMaterial() {
 }
 
 const PRESETS = {
-  idle: { intensity: 0.045, speed: 0.12, colorA: '#0891b2', colorB: '#38bdf8', bolts: 0.28 },
-  listening: { intensity: 0.075, speed: 0.45, colorA: '#22d3ee', colorB: '#818cf8', bolts: 0.6 },
-  thinking: { intensity: 0.11, speed: 1.3, colorA: '#a78bfa', colorB: '#f472b6', bolts: 0.9 },
-  speaking: { intensity: 0.065, speed: 0.6, colorA: '#34d399', colorB: '#22d3ee', bolts: 0.55 },
+  idle: { intensity: 0.045, speed: 0.12, colorA: '#0891b2', colorB: '#38bdf8', bolts: 0.28, heartRate: 0.75, veinIntensity: 0.32 },
+  listening: { intensity: 0.075, speed: 0.45, colorA: '#22d3ee', colorB: '#818cf8', bolts: 0.6, heartRate: 1.0, veinIntensity: 0.55 },
+  thinking: { intensity: 0.11, speed: 1.3, colorA: '#a78bfa', colorB: '#f472b6', bolts: 0.9, heartRate: 1.6, veinIntensity: 0.8 },
+  speaking: { intensity: 0.065, speed: 0.6, colorA: '#34d399', colorB: '#22d3ee', bolts: 0.55, heartRate: 2.0, veinIntensity: 1.0 },
 };
+
+// A "lub-dub" double-pulse waveform instead of a plain sine — reads as an
+// actual heartbeat rather than generic breathing/pulsing.
+function heartbeatPulse(t, rate) {
+  const phase = (t * rate) % 1;
+  const lub = Math.exp(-Math.pow((phase - 0.05) * 18, 2));
+  const dub = Math.exp(-Math.pow((phase - 0.22) * 16, 2)) * 0.7;
+  return Math.min(1, lub + dub);
+}
 
 function randomDirection() {
   const u = Math.random();
@@ -270,6 +349,8 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const boltIntensityRef = useRef(0.18);
+  const heartRateRef = useRef(0.75);
+  const veinIntensityRef = useRef(0.32);
   const material = useMemo(() => makeMaterial(), []);
   const glowTexture = useMemo(() => makeGlowTexture(), []);
 
@@ -306,6 +387,11 @@ export default function NeuronSphere({ state = 'idle', amplitude = 0 }) {
     material.uniforms.uColorB.value.lerp(new THREE.Color(preset.colorB), 0.05);
 
     boltIntensityRef.current = THREE.MathUtils.lerp(boltIntensityRef.current, preset.bolts * boost, 0.08);
+    heartRateRef.current = THREE.MathUtils.lerp(heartRateRef.current, preset.heartRate * boost, 0.05);
+    veinIntensityRef.current = THREE.MathUtils.lerp(veinIntensityRef.current, preset.veinIntensity * boost, 0.05);
+
+    const pulse = heartbeatPulse(material.uniforms.uTime.value, heartRateRef.current);
+    material.uniforms.uVeinPulse.value = pulse * veinIntensityRef.current;
 
     if (meshRef.current) {
       meshRef.current.rotation.y += delta * 0.08;

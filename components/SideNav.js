@@ -1,7 +1,19 @@
 'use client';
 
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
+import { useSphere } from './SphereProvider';
+import { emotionColor } from './EmotionBadge';
+
+const SphereCanvas = dynamic(() => import('./SphereCanvas'), { ssr: false });
+
+const STATUS_TEXT = {
+  idle: 'Sphere is calm',
+  listening: 'Sphere is listening…',
+  thinking: 'Sphere is thinking…',
+  speaking: 'Sphere is responding…',
+};
 
 const NAV_ITEMS = [
   {
@@ -83,6 +95,7 @@ function NavIcon({ children }) {
 export default function SideNav() {
   const pathname = usePathname();
   const router = useRouter();
+  const { sphereState, amplitude, emotion } = useSphere();
 
   if (pathname === '/login' || pathname === '/onboarding') return null;
 
@@ -93,7 +106,7 @@ export default function SideNav() {
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur">
-      <Link href="/talk" className="mb-8 flex items-center gap-3 px-2">
+      <Link href="/talk" className="mb-4 flex items-center gap-3 px-2">
         <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-neuron to-neuron2 shadow-glow">
           <span className="h-3 w-3 rounded-full bg-void" />
         </span>
@@ -104,6 +117,23 @@ export default function SideNav() {
           </span>
         </span>
       </Link>
+
+      <div className="mb-4 flex flex-col items-center gap-2 rounded-2xl border border-white/5 bg-black/20 py-4">
+        <SphereCanvas state={sphereState} amplitude={amplitude} className="h-28 w-28" />
+        <div className="glass-panel flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px]">
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ backgroundColor: sphereState === 'idle' ? '#64748b' : '#6ee7ff' }}
+          />
+          <span className="text-slate-300">{STATUS_TEXT[sphereState]}</span>
+        </div>
+        {emotion && (
+          <div className="glass-panel flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px]">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: emotionColor(emotion) }} />
+            <span className="capitalize text-slate-300">{emotion}</span>
+          </div>
+        )}
+      </div>
 
       <nav className="flex-1 space-y-1">
         {NAV_ITEMS.map((item) => {

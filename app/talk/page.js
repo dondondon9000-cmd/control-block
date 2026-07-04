@@ -2,18 +2,8 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import dynamic from 'next/dynamic';
 import MessageBubble from '@/components/MessageBubble';
-import { emotionColor } from '@/components/EmotionBadge';
-
-const SphereCanvas = dynamic(() => import('@/components/SphereCanvas'), { ssr: false });
-
-const STATUS_TEXT = {
-  idle: 'Sphere is calm',
-  listening: 'Sphere is listening…',
-  thinking: 'Sphere is thinking…',
-  speaking: 'Sphere is responding…',
-};
+import { useSphere } from '@/components/SphereProvider';
 
 export default function TalkPage() {
   return (
@@ -28,16 +18,15 @@ function TalkPageInner() {
   const router = useRouter();
   const initialConvId = searchParams.get('c');
 
+  const { sphereState, setSphereState, setAmplitude, setEmotion } = useSphere();
+
   const [conversationId, setConversationId] = useState(initialConvId ? Number(initialConvId) : null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [sphereState, setSphereState] = useState('idle');
-  const [amplitude, setAmplitude] = useState(0);
   const [recording, setRecording] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
-  const [lastEmotion, setLastEmotion] = useState(null);
 
   const recognitionRef = useRef(null);
   const amplitudeIntervalRef = useRef(null);
@@ -120,7 +109,7 @@ function TalkPageInner() {
       };
       recognitionRef.current = recognition;
     }
-  }, []);
+  }, [setAmplitude, setSphereState]);
 
   useEffect(() => {
     if (!initialConvId) return;
@@ -129,13 +118,20 @@ function TalkPageInner() {
       .then((data) => {
         setMessages(data.messages);
         const lastTagged = [...data.messages].reverse().find((m) => m.emotion);
-        if (lastTagged) setLastEmotion(lastTagged.emotion);
+        if (lastTagged) setEmotion(lastTagged.emotion);
       })
       .catch(() => setError('Could not load that entry.'));
-  }, [initialConvId]);
+  }, [initialConvId, setEmotion]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    // Deferred to the next paint — reading scrollHeight synchronously here
+    // can race ahead of the browser laying out a big batch of new message
+    // nodes (e.g. loading a long historical conversation all at once),
+    // landing the scroll partway through instead of at the true bottom.
+    const raf = requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    });
+    return () => cancelAnimationFrame(raf);
   }, [messages, sending]);
 
   function toggleRecording() {
@@ -191,7 +187,7 @@ function TalkPageInner() {
         next.push({ role: 'assistant', content: data.reply, created_at: new Date().toISOString() });
         return next;
       });
-      if (data.emotion) setLastEmotion(data.emotion);
+      if (data.emotion) setEmotion(data.emotion);
 
       if (!conversationId) {
         setConversationId(data.conversationId);
@@ -217,101 +213,76 @@ function TalkPageInner() {
   }
 
   const showEmptyState = messages.length === 0;
-  const statusColor = recording ? '#34d399' : sphereState === 'idle' ? '#64748b' : '#6ee7ff';
 
   return (
-    <div className="flex h-screen flex-col">
-      <div className="flex items-center justify-end gap-2 px-8 pt-6">
-        <div className="glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs">
-          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: statusColor }} />
-          <span className="text-slate-300">{STATUS_TEXT[sphereState]}</span>
-        </div>
-        {lastEmotion && (
-          <div className="glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs">
-            <span
-              className="h-2 w-2 rounded-full"
-              style={{ backgroundColor: emotionColor(lastEmotion) }}
-            />
-            <span className="capitalize text-slate-300">{lastEmotion}</span>
+    <div className="mx-auto flex h-screen w-full max-w-3xl flex-col px-4">
+      <div ref={scrollRef} className="scrollbar-thin min-h-0 flex-1 space-y-4 overflow-y-auto px-1 py-6">
+        {showEmptyState && (
+          <p className="mt-4 text-center text-sm text-slate-500">
+            Talk or type. This is your space — say what's actually going on.
+          </p>
+        )}
+        {messages.map((m, i) => (
+          <MessageBubble
+            key={i}
+            role={m.role}
+            content={m.content}
+            emotion={m.emotion}
+            createdAt={m.created_at}
+          />
+        ))}
+        {sending && (
+          <div className="flex justify-start">
+            <div className="glass-panel rounded-2xl px-4 py-2.5 text-sm text-slate-500">…</div>
           </div>
         )}
       </div>
 
-      <div className="relative flex h-64 shrink-0 items-center justify-center md:h-80">
-        <Suspense fallback={<div className="h-40 w-40 rounded-full bg-neuron/10" />}>
-          <SphereCanvas state={sphereState} amplitude={amplitude} className="h-64 w-64 md:h-80 md:w-80" />
-        </Suspense>
-      </div>
+      {error && <p className="px-1 text-sm text-alert">{error}</p>}
 
-      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4">
-        <div ref={scrollRef} className="scrollbar-thin flex-1 space-y-4 overflow-y-auto px-1 py-2">
-          {showEmptyState && (
-            <p className="mt-4 text-center text-sm text-slate-500">
-              Talk or type. This is your space — say what's actually going on.
-            </p>
-          )}
-          {messages.map((m, i) => (
-            <MessageBubble
-              key={i}
-              role={m.role}
-              content={m.content}
-              emotion={m.emotion}
-              createdAt={m.created_at}
-            />
-          ))}
-          {sending && (
-            <div className="flex justify-start">
-              <div className="glass-panel rounded-2xl px-4 py-2.5 text-sm text-slate-500">…</div>
-            </div>
-          )}
-        </div>
-
-        {error && <p className="px-1 text-sm text-alert">{error}</p>}
-
-        <form onSubmit={sendMessage} className="flex items-end gap-3 py-6">
-          {speechSupported && (
-            <button
-              type="button"
-              onClick={toggleRecording}
-              title={recording ? 'Tap to cancel' : 'Tap and talk — sends automatically when you stop'}
-              className={`relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border text-xl transition ${
-                recording
-                  ? 'border-alert/50 bg-alert/10 text-alert shadow-[0_0_25px_rgba(251,113,133,0.35)]'
-                  : 'border-neuron2/40 bg-gradient-to-br from-neuron/25 via-neuron2/15 to-neuron2/30 text-neuron shadow-glow hover:from-neuron/35 hover:to-neuron2/40'
-              }`}
-            >
-              {recording ? (
-                <span className="flex items-end gap-0.5">
-                  {[0, 1, 2, 3].map((i) => (
-                    <span
-                      key={i}
-                      className="w-0.5 animate-pulse rounded-full bg-alert"
-                      style={{ height: `${8 + (i % 3) * 5}px`, animationDelay: `${i * 120}ms` }}
-                    />
-                  ))}
-                </span>
-              ) : (
-                '🎙'
-              )}
-            </button>
-          )}
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            placeholder={recording ? 'Listening…' : "What's on your mind..."}
-            className="glass-panel flex-1 resize-none rounded-2xl px-4 py-3 text-sm text-slate-100 outline-none focus:border-neuron2/50"
-          />
+      <form onSubmit={sendMessage} className="flex items-end gap-3 py-6">
+        {speechSupported && (
           <button
-            type="submit"
-            disabled={sending || !input.trim()}
-            className="shrink-0 rounded-full bg-gradient-to-br from-neuron to-neuron2 px-5 py-3 text-sm font-medium text-void transition hover:brightness-110 disabled:opacity-40"
+            type="button"
+            onClick={toggleRecording}
+            title={recording ? 'Tap to cancel' : 'Tap and talk — sends automatically when you stop'}
+            className={`relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border text-xl transition ${
+              recording
+                ? 'border-alert/50 bg-alert/10 text-alert shadow-[0_0_25px_rgba(251,113,133,0.35)]'
+                : 'border-neuron2/40 bg-gradient-to-br from-neuron/25 via-neuron2/15 to-neuron2/30 text-neuron shadow-glow hover:from-neuron/35 hover:to-neuron2/40'
+            }`}
           >
-            Send
+            {recording ? (
+              <span className="flex items-end gap-0.5">
+                {[0, 1, 2, 3].map((i) => (
+                  <span
+                    key={i}
+                    className="w-0.5 animate-pulse rounded-full bg-alert"
+                    style={{ height: `${8 + (i % 3) * 5}px`, animationDelay: `${i * 120}ms` }}
+                  />
+                ))}
+              </span>
+            ) : (
+              '🎙'
+            )}
           </button>
-        </form>
-      </div>
+        )}
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          rows={1}
+          placeholder={recording ? 'Listening…' : "What's on your mind..."}
+          className="glass-panel flex-1 resize-none rounded-2xl px-4 py-3 text-sm text-slate-100 outline-none focus:border-neuron2/50"
+        />
+        <button
+          type="submit"
+          disabled={sending || !input.trim()}
+          className="shrink-0 rounded-full bg-gradient-to-br from-neuron to-neuron2 px-5 py-3 text-sm font-medium text-void transition hover:brightness-110 disabled:opacity-40"
+        >
+          Send
+        </button>
+      </form>
     </div>
   );
 }
