@@ -52,7 +52,7 @@ export async function POST(req) {
   const profile = await getProfile();
   const planBlock = profile?.future_vision
     ? `\n\nTheir currently stated future vision: "${profile.future_vision}"\nObstacles they named: "${profile.obstacles || '(none stated)'}"\nCurrent growth plan steps: ${profile.growth_plan || '[]'}`
-    : '\n\n(No future vision has been set yet — leave visionStillFits true and the update fields empty.)';
+    : '\n\n(No future vision has been set yet — leave planGapNotes empty.)';
 
   let result;
   try {
@@ -78,17 +78,11 @@ export async function POST(req) {
     ON CONFLICT (year, month) DO UPDATE SET content = excluded.content, created_at = excluded.created_at
   `;
 
-  // The plan only evolves when the model finds real, sustained evidence of a
-  // shift (see periodSummarySystemPrompt) — a single hard week never rewrites
-  // it, and no vision means there's nothing to revise yet.
-  if (profile?.future_vision && result.visionStillFits === false && result.updatedVision) {
-    await sql`
-      UPDATE profile
-      SET future_vision = ${result.updatedVision},
-          obstacles = ${result.updatedObstacles || profile.obstacles},
-          growth_plan = ${JSON.stringify(result.updatedPlanSteps?.length ? result.updatedPlanSteps : JSON.parse(profile.growth_plan || '[]'))}
-      WHERE id = 1
-    `;
+  // This job only ever flags a possible gap — it never rewrites the plan
+  // itself. The Talk companion surfaces flagged gaps in conversation, and the
+  // plan only actually changes once the user explicitly confirms it there.
+  if (profile?.future_vision) {
+    await sql`UPDATE profile SET plan_gap_notes = ${JSON.stringify(result.planGapNotes || [])} WHERE id = 1`;
   }
 
   return NextResponse.json({ year, month, content: result });

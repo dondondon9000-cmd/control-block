@@ -3,7 +3,7 @@ import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { COMPANION_SYSTEM_PROMPT, JOURNAL_RESPONSE_TOOL } from '@/lib/prompts';
 import { searchJournal, formatMemoryContext } from '@/lib/journalSearch';
-import { getProfile, formatPlanContext } from '@/lib/planContext';
+import { getProfile, formatPlanContext, applyConfirmedPlanUpdate, clearPlanGapNotes } from '@/lib/planContext';
 
 const HISTORY_LIMIT = 24;
 
@@ -85,6 +85,19 @@ export async function POST(req) {
 
   await sql`UPDATE conversations SET updated_at = ${nowAssistant} WHERE id = ${convId}`;
 
+  // The plan only ever changes here, on the user's own explicit confirmation
+  // in this exact message (see JOURNAL_RESPONSE_TOOL) — never automatically
+  // from the monthly reflection job, which only flags a gap to check in on.
+  let planUpdated = false;
+  if (result.planUpdate?.changed && result.planUpdate.vision) {
+    await applyConfirmedPlanUpdate(result.planUpdate, profile);
+    planUpdated = true;
+  } else if (result.raisedPlanGap) {
+    // Brought up once — don't keep raising the same gap every message until
+    // the next monthly reflection re-evaluates it against fresh entries.
+    await clearPlanGapNotes();
+  }
+
   return NextResponse.json({
     conversationId: convId,
     reply: result.reply,
@@ -94,5 +107,6 @@ export async function POST(req) {
     goals: result.goals,
     relationships: result.relationships,
     topics: result.topics,
+    planUpdated,
   });
 }

@@ -51,6 +51,7 @@ function TalkPageInner() {
   const [selectedVoiceKey, setSelectedVoiceKey] = useState('');
   const [speechRate, setSpeechRate] = useState(1);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
+  const [planUpdateNotice, setPlanUpdateNotice] = useState(false);
 
   const recognitionRef = useRef(null);
   const amplitudeIntervalRef = useRef(null);
@@ -261,6 +262,11 @@ function TalkPageInner() {
       });
       if (data.emotion) setEmotion(data.emotion);
 
+      if (data.planUpdated) {
+        setPlanUpdateNotice(true);
+        setTimeout(() => setPlanUpdateNotice(false), 6000);
+      }
+
       if (!conversationId) {
         setConversationId(data.conversationId);
         router.replace(`/talk?c=${data.conversationId}`);
@@ -300,6 +306,12 @@ function TalkPageInner() {
           <div className="glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs">
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: emotionColor(emotion) }} />
             <span className="capitalize text-slate-300">{emotion}</span>
+          </div>
+        )}
+        {planUpdateNotice && (
+          <div className="glass-panel flex items-center gap-2 rounded-full border-neuron2/40 px-4 py-2 text-xs text-neuron2">
+            <span>✨</span>
+            <span>Growth plan updated</span>
           </div>
         )}
         {speechSynthesisAvailable && (
