@@ -16,6 +16,14 @@ const STATUS_TEXT = {
   speaking: 'Sphere is responding…',
 };
 
+// Some browsers (notably Android Chrome) leave `voiceURI` blank on every
+// voice, which would make every <option> collapse to the same value and
+// silently ignore selection changes. name+lang is always populated and
+// effectively unique, so it's used as the selection key instead.
+function voiceKey(v) {
+  return `${v.name}::${v.lang}`;
+}
+
 export default function TalkPage() {
   return (
     <Suspense fallback={null}>
@@ -40,7 +48,7 @@ function TalkPageInner() {
   const [speechSupported, setSpeechSupported] = useState(false);
   const [speechSynthesisAvailable, setSpeechSynthesisAvailable] = useState(false);
   const [voices, setVoices] = useState([]);
-  const [voiceURI, setVoiceURI] = useState('');
+  const [selectedVoiceKey, setSelectedVoiceKey] = useState('');
   const [speechRate, setSpeechRate] = useState(1);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
 
@@ -55,7 +63,7 @@ function TalkPageInner() {
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     setSpeechSynthesisAvailable(true);
-    const savedVoiceURI = localStorage.getItem('controlblock:voiceURI') || '';
+    const savedVoiceKey = localStorage.getItem('controlblock:voiceKey') || '';
     const savedRate = parseFloat(localStorage.getItem('controlblock:speechRate'));
     if (!Number.isNaN(savedRate)) setSpeechRate(savedRate);
 
@@ -63,9 +71,9 @@ function TalkPageInner() {
       const list = window.speechSynthesis.getVoices();
       voicesRef.current = list;
       setVoices(list);
-      setVoiceURI((current) => {
-        if (current && list.some((v) => v.voiceURI === current)) return current;
-        if (savedVoiceURI && list.some((v) => v.voiceURI === savedVoiceURI)) return savedVoiceURI;
+      setSelectedVoiceKey((current) => {
+        if (current && list.some((v) => voiceKey(v) === current)) return current;
+        if (savedVoiceKey && list.some((v) => voiceKey(v) === savedVoiceKey)) return savedVoiceKey;
         // Desktop Chrome ships a named "Google UK English Male" voice; Android's
         // TTS engine doesn't label gender the same way, so this falls back
         // through looser en-GB / en matches to find the closest thing available.
@@ -76,7 +84,7 @@ function TalkPageInner() {
           list.find((v) => v.lang?.startsWith('en-GB')) ||
           list.find((v) => v.lang?.startsWith('en')) ||
           list[0];
-        return preferred ? preferred.voiceURI : '';
+        return preferred ? voiceKey(preferred) : '';
       });
     };
     loadVoices();
@@ -86,8 +94,8 @@ function TalkPageInner() {
 
   function handleVoiceChange(e) {
     const next = e.target.value;
-    setVoiceURI(next);
-    if (next) localStorage.setItem('controlblock:voiceURI', next);
+    setSelectedVoiceKey(next);
+    if (next) localStorage.setItem('controlblock:voiceKey', next);
   }
 
   function handleRateChange(e) {
@@ -107,8 +115,13 @@ function TalkPageInner() {
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     const list = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
-    const selected = list.find((v) => v.voiceURI === voiceURI);
-    if (selected) utterance.voice = selected;
+    const selected = list.find((v) => voiceKey(v) === selectedVoiceKey);
+    if (selected) {
+      utterance.voice = selected;
+      // Some Android TTS bridges honor `lang` more reliably than `voice` —
+      // setting both gives the OS the best chance of picking the right one.
+      utterance.lang = selected.lang;
+    }
     utterance.rate = speechRate;
     utterance.onstart = () => setSphereState('speaking');
     utterance.onend = () => setSphereState('idle');
@@ -310,12 +323,12 @@ function TalkPageInner() {
             <label className="flex flex-col gap-1">
               <span className="text-slate-400">Voice</span>
               <select
-                value={voiceURI}
+                value={selectedVoiceKey}
                 onChange={handleVoiceChange}
                 className="rounded-lg border border-white/10 bg-panel/80 px-2 py-1.5 text-slate-200 outline-none focus:border-neuron2/50"
               >
                 {voices.map((v) => (
-                  <option key={v.voiceURI} value={v.voiceURI}>
+                  <option key={voiceKey(v)} value={voiceKey(v)}>
                     {v.name} ({v.lang})
                   </option>
                 ))}
