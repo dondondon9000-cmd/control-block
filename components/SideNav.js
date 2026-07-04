@@ -105,7 +105,7 @@ export default function SideNav() {
   }
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur">
+    <aside className="flex h-screen w-80 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur">
       <Link href="/talk" className="mb-4 flex items-center gap-3 px-2">
         <span className="relative flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-neuron to-neuron2 shadow-glow">
           <span className="h-3 w-3 rounded-full bg-void" />
@@ -118,8 +118,8 @@ export default function SideNav() {
         </span>
       </Link>
 
-      <div className="mb-4 flex flex-col items-center gap-2 rounded-2xl border border-white/5 bg-black/20 py-4">
-        <SphereCanvas state={sphereState} amplitude={amplitude} className="h-28 w-28" />
+      <div className="mb-4 flex flex-col items-center gap-2 rounded-2xl border border-white/5 bg-black py-6">
+        <SphereCanvas state={sphereState} amplitude={amplitude} className="h-44 w-44" />
         <div className="glass-panel flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px]">
           <span
             className="h-1.5 w-1.5 rounded-full"
