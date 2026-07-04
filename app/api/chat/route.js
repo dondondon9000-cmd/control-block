@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { COMPANION_SYSTEM_PROMPT, JOURNAL_RESPONSE_TOOL } from '@/lib/prompts';
+import { searchJournal, formatMemoryContext } from '@/lib/journalSearch';
 
 const HISTORY_LIMIT = 24;
 
@@ -36,14 +37,19 @@ export async function POST(req) {
     }
   }
 
-  const history = await sql`
-    SELECT role, content FROM messages WHERE conversation_id = ${convId} ORDER BY id ASC LIMIT ${HISTORY_LIMIT}
-  `;
+  // Both run against fast indexed queries — pulled in parallel so the past-
+  // entry search never adds a serial round trip to a normal chat turn.
+  const [history, pastEntries] = await Promise.all([
+    sql`SELECT role, content FROM messages WHERE conversation_id = ${convId} ORDER BY id ASC LIMIT ${HISTORY_LIMIT}`,
+    searchJournal(message, { excludeConversationId: convId, limit: 5 }),
+  ]);
+
+  const system = COMPANION_SYSTEM_PROMPT + formatMemoryContext(pastEntries);
 
   let result;
   try {
     result = await callWithTool({
-      system: COMPANION_SYSTEM_PROMPT,
+      system,
       messages: [...history, { role: 'user', content: message }],
       tool: JOURNAL_RESPONSE_TOOL,
     });
