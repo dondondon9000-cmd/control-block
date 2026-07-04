@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { COMPANION_SYSTEM_PROMPT, JOURNAL_RESPONSE_TOOL } from '@/lib/prompts';
 
@@ -17,26 +17,28 @@ export async function POST(req) {
     return NextResponse.json({ error: 'message is required' }, { status: 400 });
   }
 
+  await ensureSchema();
+
   const now = new Date().toISOString();
   let convId = conversationId;
 
   if (!convId) {
-    const info = db
-      .prepare('INSERT INTO conversations (title, created_at, updated_at) VALUES (?, ?, ?)')
-      .run(makeTitle(message), now, now);
-    convId = info.lastInsertRowid;
+    const rows = await sql`
+      INSERT INTO conversations (title, created_at, updated_at)
+      VALUES (${makeTitle(message)}, ${now}, ${now})
+      RETURNING id
+    `;
+    convId = rows[0].id;
   } else {
-    const exists = db.prepare('SELECT id FROM conversations WHERE id = ?').get(convId);
-    if (!exists) {
+    const exists = await sql`SELECT id FROM conversations WHERE id = ${convId}`;
+    if (exists.length === 0) {
       return NextResponse.json({ error: 'conversation not found' }, { status: 404 });
     }
   }
 
-  const history = db
-    .prepare(
-      'SELECT role, content FROM messages WHERE conversation_id = ? ORDER BY id ASC LIMIT ?'
-    )
-    .all(convId, HISTORY_LIMIT);
+  const history = await sql`
+    SELECT role, content FROM messages WHERE conversation_id = ${convId} ORDER BY id ASC LIMIT ${HISTORY_LIMIT}
+  `;
 
   let result;
   try {
@@ -49,41 +51,26 @@ export async function POST(req) {
     return NextResponse.json({ error: err.message || 'AI request failed' }, { status: 502 });
   }
 
-  const insertMessage = db.prepare(
-    `INSERT INTO messages
-      (conversation_id, role, content, emotion, sentiment, worries, goals, relationships, topics, created_at)
-     VALUES (@conversation_id, @role, @content, @emotion, @sentiment, @worries, @goals, @relationships, @topics, @created_at)`
-  );
-
   const nowUser = new Date().toISOString();
-  insertMessage.run({
-    conversation_id: convId,
-    role: 'user',
-    content: message,
-    emotion: result.emotion || null,
-    sentiment: typeof result.sentiment === 'number' ? result.sentiment : null,
-    worries: JSON.stringify(result.worries || []),
-    goals: JSON.stringify(result.goals || []),
-    relationships: JSON.stringify(result.relationships || []),
-    topics: JSON.stringify(result.topics || []),
-    created_at: nowUser,
-  });
+  await sql`
+    INSERT INTO messages
+      (conversation_id, role, content, emotion, sentiment, worries, goals, relationships, topics, created_at)
+    VALUES (
+      ${convId}, 'user', ${message}, ${result.emotion || null},
+      ${typeof result.sentiment === 'number' ? result.sentiment : null},
+      ${JSON.stringify(result.worries || [])}, ${JSON.stringify(result.goals || [])},
+      ${JSON.stringify(result.relationships || [])}, ${JSON.stringify(result.topics || [])}, ${nowUser}
+    )
+  `;
 
   const nowAssistant = new Date().toISOString();
-  insertMessage.run({
-    conversation_id: convId,
-    role: 'assistant',
-    content: result.reply,
-    emotion: null,
-    sentiment: null,
-    worries: '[]',
-    goals: '[]',
-    relationships: '[]',
-    topics: '[]',
-    created_at: nowAssistant,
-  });
+  await sql`
+    INSERT INTO messages
+      (conversation_id, role, content, emotion, sentiment, worries, goals, relationships, topics, created_at)
+    VALUES (${convId}, 'assistant', ${result.reply}, NULL, NULL, '[]', '[]', '[]', '[]', ${nowAssistant})
+  `;
 
-  db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(nowAssistant, convId);
+  await sql`UPDATE conversations SET updated_at = ${nowAssistant} WHERE id = ${convId}`;
 
   return NextResponse.json({
     conversationId: convId,

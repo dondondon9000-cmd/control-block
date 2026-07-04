@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { ONBOARDING_VISION_TOOL, ONBOARDING_PLAN_TOOL } from '@/lib/prompts';
 
@@ -12,7 +12,8 @@ export async function POST(req) {
     return NextResponse.json({ error: 'answer is required' }, { status: 400 });
   }
 
-  db.prepare('INSERT OR IGNORE INTO profile (id) VALUES (1)').run();
+  await ensureSchema();
+  await sql`INSERT INTO profile (id) VALUES (1) ON CONFLICT (id) DO NOTHING`;
 
   if (stage === 'vision') {
     let result;
@@ -31,13 +32,14 @@ export async function POST(req) {
       return NextResponse.json({ error: err.message || 'AI request failed' }, { status: 502 });
     }
 
-    db.prepare('UPDATE profile SET future_vision = ? WHERE id = 1').run(answer);
+    await sql`UPDATE profile SET future_vision = ${answer} WHERE id = 1`;
 
     return NextResponse.json({ reflection: result.reflection });
   }
 
   if (stage === 'obstacles') {
-    const profile = db.prepare('SELECT future_vision FROM profile WHERE id = 1').get();
+    const profileRows = await sql`SELECT future_vision FROM profile WHERE id = 1`;
+    const profile = profileRows[0];
 
     let result;
     try {
@@ -55,9 +57,11 @@ export async function POST(req) {
       return NextResponse.json({ error: err.message || 'AI request failed' }, { status: 502 });
     }
 
-    db.prepare(
-      'UPDATE profile SET obstacles = ?, growth_plan = ?, onboarded_at = ? WHERE id = 1'
-    ).run(answer, JSON.stringify(result.steps), new Date().toISOString());
+    await sql`
+      UPDATE profile
+      SET obstacles = ${answer}, growth_plan = ${JSON.stringify(result.steps)}, onboarded_at = ${new Date().toISOString()}
+      WHERE id = 1
+    `;
 
     return NextResponse.json({ message: result.message, steps: result.steps });
   }

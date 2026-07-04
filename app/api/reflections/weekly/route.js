@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql, ensureSchema } from '@/lib/db';
 import { callWithTool } from '@/lib/anthropicClient';
 import { PERIOD_SUMMARY_TOOL, periodSummarySystemPrompt } from '@/lib/prompts';
 import { startOfWeek, endOfWeek, toISODate } from '@/lib/dateUtils';
@@ -11,23 +11,21 @@ function resolveWeek(weekStartParam) {
   return { start, end, weekStart: toISODate(start), weekEnd: toISODate(end) };
 }
 
-function fetchTranscript(startISO, endISO) {
-  return db
-    .prepare(
-      `SELECT role, content, emotion, created_at FROM messages
-       WHERE created_at >= ? AND created_at <= ? AND role = 'user'
-       ORDER BY created_at ASC`
-    )
-    .all(startISO, endISO);
+async function fetchTranscript(startISO, endISO) {
+  return sql`
+    SELECT role, content, emotion, created_at FROM messages
+    WHERE created_at >= ${startISO} AND created_at <= ${endISO} AND role = 'user'
+    ORDER BY created_at ASC
+  `;
 }
 
 export async function GET(req) {
+  await ensureSchema();
   const { searchParams } = new URL(req.url);
   const { weekStart } = resolveWeek(searchParams.get('week_start'));
-  const row = db.prepare('SELECT * FROM weekly_reflections WHERE week_start = ?').get(weekStart);
-  const history = db
-    .prepare('SELECT * FROM weekly_reflections ORDER BY week_start DESC LIMIT 12')
-    .all();
+  const rows = await sql`SELECT * FROM weekly_reflections WHERE week_start = ${weekStart}`;
+  const row = rows[0];
+  const history = await sql`SELECT * FROM weekly_reflections ORDER BY week_start DESC LIMIT 12`;
   return NextResponse.json({
     current: row ? { ...row, content: JSON.parse(row.content) } : null,
     weekStart,
@@ -36,10 +34,11 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
+  await ensureSchema();
   const body = await req.json().catch(() => ({}));
   const { start, end, weekStart, weekEnd } = resolveWeek(body.week_start);
 
-  const messages = fetchTranscript(start.toISOString(), end.toISOString());
+  const messages = await fetchTranscript(start.toISOString(), end.toISOString());
   if (messages.length === 0) {
     return NextResponse.json({ error: 'No entries logged this week yet.' }, { status: 400 });
   }
@@ -61,11 +60,11 @@ export async function POST(req) {
   }
 
   const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO weekly_reflections (week_start, week_end, content, created_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(week_start) DO UPDATE SET content = excluded.content, created_at = excluded.created_at`
-  ).run(weekStart, weekEnd, JSON.stringify(result), now);
+  await sql`
+    INSERT INTO weekly_reflections (week_start, week_end, content, created_at)
+    VALUES (${weekStart}, ${weekEnd}, ${JSON.stringify(result)}, ${now})
+    ON CONFLICT (week_start) DO UPDATE SET content = excluded.content, created_at = excluded.created_at
+  `;
 
   return NextResponse.json({ weekStart, weekEnd, content: result });
 }

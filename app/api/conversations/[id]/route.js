@@ -1,15 +1,15 @@
 import { NextResponse } from 'next/server';
-import db from '@/lib/db';
+import { sql, ensureSchema } from '@/lib/db';
 
 export async function GET(_req, { params }) {
+  await ensureSchema();
   const id = Number(params.id);
-  const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
+  const conversations = await sql`SELECT * FROM conversations WHERE id = ${id}`;
+  const conversation = conversations[0];
   if (!conversation) {
     return NextResponse.json({ error: 'not found' }, { status: 404 });
   }
-  const messages = db
-    .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY id ASC')
-    .all(id);
+  const messages = await sql`SELECT * FROM messages WHERE conversation_id = ${id} ORDER BY id ASC`;
 
   return NextResponse.json({
     conversation,
@@ -24,7 +24,8 @@ export async function GET(_req, { params }) {
 }
 
 export async function DELETE(_req, { params }) {
+  await ensureSchema();
   const id = Number(params.id);
-  db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+  await sql`DELETE FROM conversations WHERE id = ${id}`;
   return NextResponse.json({ ok: true });
 }
