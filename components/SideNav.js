@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter } from 'next/navigation';
@@ -121,6 +121,18 @@ function LogoutIcon() {
   );
 }
 
+function ChevronIcon({ direction }) {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+      <path
+        d={direction === 'left' ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function SidebarBody({
   pathname,
   showSidebarSphere,
@@ -221,6 +233,14 @@ export default function SideNav() {
   const router = useRouter();
   const { sphereState, amplitude, emotion } = useSphere();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Desktop-only "just the sphere" mode — starts closed on every load (not
+  // read from localStorage until after mount) so there's no server/client
+  // hydration mismatch; flips to the saved preference right after mount.
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+
+  useEffect(() => {
+    setSidebarHidden(localStorage.getItem('controlblock:sidebarHidden') === 'true');
+  }, []);
 
   if (pathname === '/login' || pathname === '/onboarding') return null;
 
@@ -239,6 +259,11 @@ export default function SideNav() {
     }
     await fetch('/api/profile/reset', { method: 'POST' });
     router.push('/onboarding');
+  }
+
+  function setSidebarHiddenPersisted(hidden) {
+    setSidebarHidden(hidden);
+    localStorage.setItem('controlblock:sidebarHidden', String(hidden));
   }
 
   return (
@@ -285,8 +310,22 @@ export default function SideNav() {
         </div>
       )}
 
-      {/* Desktop sidebar — identical to the original design, just hidden below lg */}
-      <aside className="hidden h-screen w-80 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur lg:flex">
+      {/* Desktop sidebar — identical to the original design, just hidden below
+          lg (and hideable entirely at lg+ via the collapse toggle below, for
+          a "just the sphere" view). */}
+      <aside
+        className={`relative hidden h-screen w-80 shrink-0 flex-col border-r border-white/5 bg-panel/60 px-4 py-6 backdrop-blur ${
+          sidebarHidden ? '' : 'lg:flex'
+        }`}
+      >
+        <button
+          onClick={() => setSidebarHiddenPersisted(true)}
+          aria-label="Hide sidebar"
+          title="Hide sidebar"
+          className="absolute right-3 top-3 rounded-lg p-1 text-slate-600 transition hover:bg-white/5 hover:text-slate-300"
+        >
+          <ChevronIcon direction="left" />
+        </button>
         <SidebarBody
           pathname={pathname}
           showSidebarSphere={showSidebarSphere}
@@ -297,6 +336,20 @@ export default function SideNav() {
           onResetOnboarding={resetOnboarding}
         />
       </aside>
+
+      {/* Floating restore tab — the only way back once the sidebar's hidden,
+          so it has to be outside the aside itself. Desktop only; mobile has
+          its own hamburger/drawer that this never touches. */}
+      {sidebarHidden && (
+        <button
+          onClick={() => setSidebarHiddenPersisted(false)}
+          aria-label="Show sidebar"
+          title="Show sidebar"
+          className="fixed left-0 top-1/2 z-40 hidden -translate-y-1/2 rounded-r-lg border border-l-0 border-white/10 bg-panel/80 px-1.5 py-4 text-slate-500 backdrop-blur transition hover:text-neuron lg:block"
+        >
+          <ChevronIcon direction="right" />
+        </button>
+      )}
     </>
   );
 }
