@@ -52,6 +52,7 @@ function TalkPageInner() {
   const [speechRate, setSpeechRate] = useState(1);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [planUpdateNotice, setPlanUpdateNotice] = useState(false);
+  const [handsFreeMode, setHandsFreeMode] = useState(false);
 
   const recognitionRef = useRef(null);
   const amplitudeIntervalRef = useRef(null);
@@ -60,6 +61,14 @@ function TalkPageInner() {
   const sendMessageRef = useRef(() => {});
   const voicesRef = useRef([]);
   const hasScrolledOnceRef = useRef(false);
+  // Mirrors state for use inside SpeechRecognition/SpeechSynthesis callbacks,
+  // which close over whichever render was current when they were attached —
+  // reading these refs instead of the state directly avoids acting on a
+  // stale value from an earlier render.
+  const recordingRef = useRef(false);
+  const handsFreeRef = useRef(false);
+  recordingRef.current = recording;
+  handsFreeRef.current = handsFreeMode;
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -67,6 +76,7 @@ function TalkPageInner() {
     const savedVoiceKey = localStorage.getItem('controlblock:voiceKey') || '';
     const savedRate = parseFloat(localStorage.getItem('controlblock:speechRate'));
     if (!Number.isNaN(savedRate)) setSpeechRate(savedRate);
+    setHandsFreeMode(localStorage.getItem('controlblock:handsFreeMode') === 'true');
 
     const loadVoices = () => {
       const list = window.speechSynthesis.getVoices();
@@ -125,7 +135,15 @@ function TalkPageInner() {
     }
     utterance.rate = speechRate;
     utterance.onstart = () => setSphereState('speaking');
-    utterance.onend = () => setSphereState('idle');
+    utterance.onend = () => {
+      setSphereState('idle');
+      // Hands-free mode: pick the mic back up on its own once the reply
+      // finishes, so the conversation keeps going without another tap.
+      // Not on onerror — that's the path a manual tap-to-interrupt takes
+      // (see startListening's cancel() call), which already starts its own
+      // fresh listening session; auto-restarting there too would race it.
+      if (handsFreeRef.current) startListening();
+    };
     utterance.onerror = () => setSphereState('idle');
     window.speechSynthesis.speak(utterance);
   }
@@ -207,14 +225,12 @@ function TalkPageInner() {
     hasScrolledOnceRef.current = false;
   }, [conversationId]);
 
-  function toggleRecording() {
-    if (!speechSupported) return;
-    if (recording) {
-      // Manual cancel — stop now. onend will fire; if nothing was
-      // transcribed yet it just goes back to idle instead of sending.
-      recognitionRef.current.stop();
-      return;
-    }
+  // Function declaration (not const) so it's hoisted — speak()'s onend
+  // handler, defined earlier in the component body, calls this too.
+  function startListening() {
+    if (!speechSupported || recordingRef.current) return;
+    // Doubles as tap-to-interrupt: if the sphere is mid-reply, this cuts it
+    // off immediately and starts listening for what you actually want to say.
     window.speechSynthesis?.cancel();
     transcriptRef.current = '';
     setInput('');
@@ -224,6 +240,24 @@ function TalkPageInner() {
     amplitudeIntervalRef.current = setInterval(() => {
       setAmplitude(0.3 + Math.random() * 0.7);
     }, 180);
+  }
+
+  function toggleRecording() {
+    if (!speechSupported) return;
+    if (recording) {
+      // Manual cancel — stop now. onend will fire; if nothing was
+      // transcribed yet it just goes back to idle instead of sending.
+      recognitionRef.current.stop();
+      return;
+    }
+    startListening();
+  }
+
+  function toggleHandsFree() {
+    const next = !handsFreeMode;
+    setHandsFreeMode(next);
+    localStorage.setItem('controlblock:handsFreeMode', String(next));
+    if (next && sphereState === 'idle' && !recording) startListening();
   }
 
   async function sendMessage(e, overrideText) {
@@ -327,6 +361,23 @@ function TalkPageInner() {
             <span>Voice</span>
           </button>
         )}
+        {speechSupported && speechSynthesisAvailable && (
+          <button
+            type="button"
+            onClick={toggleHandsFree}
+            title={
+              handsFreeMode
+                ? 'Hands-free is on — Sphere listens again automatically after replying'
+                : 'Turn on hands-free conversation — no need to tap the mic each turn'
+            }
+            className={`glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs transition ${
+              handsFreeMode ? 'text-neuron' : 'text-slate-300 hover:text-neuron'
+            }`}
+          >
+            <span>{handsFreeMode ? '🎧' : '🎙️'}</span>
+            <span>Hands-free</span>
+          </button>
+        )}
       </div>
 
       {showVoiceSettings && speechSynthesisAvailable && (
@@ -408,7 +459,13 @@ function TalkPageInner() {
             <button
               type="button"
               onClick={toggleRecording}
-              title={recording ? 'Tap to cancel' : 'Tap and talk — sends automatically when you stop'}
+              title={
+                recording
+                  ? 'Tap to cancel'
+                  : sphereState === 'speaking'
+                    ? 'Tap to interrupt and talk'
+                    : 'Tap and talk — sends automatically when you stop'
+              }
               className={`relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border text-xl transition ${
                 recording
                   ? 'border-alert/50 bg-alert/10 text-alert shadow-[0_0_25px_rgba(251,113,133,0.35)]'
