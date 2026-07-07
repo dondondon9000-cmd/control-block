@@ -4,8 +4,10 @@ import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import MessageBubble from '@/components/MessageBubble';
+import VoiceSettingsPanel from '@/components/VoiceSettingsPanel';
 import { useSphere } from '@/components/SphereProvider';
 import { emotionColor } from '@/components/EmotionBadge';
+import useVoiceConversation from '@/hooks/useVoiceConversation';
 
 const SphereCanvas = dynamic(() => import('@/components/SphereCanvas'), { ssr: false });
 
@@ -15,14 +17,6 @@ const STATUS_TEXT = {
   thinking: 'Sphere is thinking…',
   speaking: 'Sphere is responding…',
 };
-
-// Some browsers (notably Android Chrome) leave `voiceURI` blank on every
-// voice, which would make every <option> collapse to the same value and
-// silently ignore selection changes. name+lang is always populated and
-// effectively unique, so it's used as the selection key instead.
-function voiceKey(v) {
-  return `${v.name}::${v.lang}`;
-}
 
 export default function TalkPage() {
   return (
@@ -37,159 +31,23 @@ function TalkPageInner() {
   const router = useRouter();
   const initialConvId = searchParams.get('c');
 
-  const { sphereState, setSphereState, amplitude, setAmplitude, emotion, setEmotion } = useSphere();
+  const { sphereState, setSphereState, amplitude, emotion, setEmotion } = useSphere();
 
   const [conversationId, setConversationId] = useState(initialConvId ? Number(initialConvId) : null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const [recording, setRecording] = useState(false);
-  const [speechSupported, setSpeechSupported] = useState(false);
-  const [speechSynthesisAvailable, setSpeechSynthesisAvailable] = useState(false);
-  const [voices, setVoices] = useState([]);
-  const [selectedVoiceKey, setSelectedVoiceKey] = useState('');
-  const [speechRate, setSpeechRate] = useState(1);
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
   const [planUpdateNotice, setPlanUpdateNotice] = useState(false);
-  const [handsFreeMode, setHandsFreeMode] = useState(false);
 
-  const recognitionRef = useRef(null);
-  const amplitudeIntervalRef = useRef(null);
   const scrollRef = useRef(null);
-  const transcriptRef = useRef('');
-  const sendMessageRef = useRef(() => {});
-  const voicesRef = useRef([]);
   const hasScrolledOnceRef = useRef(false);
-  // Mirrors state for use inside SpeechRecognition/SpeechSynthesis callbacks,
-  // which close over whichever render was current when they were attached —
-  // reading these refs instead of the state directly avoids acting on a
-  // stale value from an earlier render.
-  const recordingRef = useRef(false);
-  const handsFreeRef = useRef(false);
-  recordingRef.current = recording;
-  handsFreeRef.current = handsFreeMode;
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    setSpeechSynthesisAvailable(true);
-    const savedVoiceKey = localStorage.getItem('controlblock:voiceKey') || '';
-    const savedRate = parseFloat(localStorage.getItem('controlblock:speechRate'));
-    if (!Number.isNaN(savedRate)) setSpeechRate(savedRate);
-    setHandsFreeMode(localStorage.getItem('controlblock:handsFreeMode') === 'true');
-
-    const loadVoices = () => {
-      const list = window.speechSynthesis.getVoices();
-      voicesRef.current = list;
-      setVoices(list);
-      setSelectedVoiceKey((current) => {
-        if (current && list.some((v) => voiceKey(v) === current)) return current;
-        if (savedVoiceKey && list.some((v) => voiceKey(v) === savedVoiceKey)) return savedVoiceKey;
-        // Desktop Chrome ships a named "Google UK English Male" voice; Android's
-        // TTS engine doesn't label gender the same way, so this falls back
-        // through looser en-GB / en matches to find the closest thing available.
-        const preferred =
-          list.find((v) => v.name === 'Google UK English Male') ||
-          list.find((v) => /uk/i.test(v.name) && /male/i.test(v.name)) ||
-          list.find((v) => v.lang === 'en-GB' && !/female/i.test(v.name)) ||
-          list.find((v) => v.lang?.startsWith('en-GB')) ||
-          list.find((v) => v.lang?.startsWith('en')) ||
-          list[0];
-        return preferred ? voiceKey(preferred) : '';
-      });
-    };
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-    return () => window.speechSynthesis.cancel();
-  }, []);
-
-  function handleVoiceChange(e) {
-    const next = e.target.value;
-    setSelectedVoiceKey(next);
-    if (next) localStorage.setItem('controlblock:voiceKey', next);
-  }
-
-  function handleRateChange(e) {
-    const next = parseFloat(e.target.value);
-    setSpeechRate(next);
-    localStorage.setItem('controlblock:speechRate', String(next));
-  }
-
-  function speak(text) {
-    if (typeof window === 'undefined' || !window.speechSynthesis) {
-      // No speech synthesis available — still flash "speaking" briefly so
-      // the sphere doesn't stay stuck on "thinking" forever.
-      setSphereState('speaking');
-      setTimeout(() => setSphereState('idle'), 1800);
-      return;
-    }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const list = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
-    const selected = list.find((v) => voiceKey(v) === selectedVoiceKey);
-    if (selected) {
-      utterance.voice = selected;
-      // Some Android TTS bridges honor `lang` more reliably than `voice` —
-      // setting both gives the OS the best chance of picking the right one.
-      utterance.lang = selected.lang;
-    }
-    utterance.rate = speechRate;
-    utterance.onstart = () => setSphereState('speaking');
-    utterance.onend = () => {
-      setSphereState('idle');
-      // Hands-free mode: pick the mic back up on its own once the reply
-      // finishes, so the conversation keeps going without another tap.
-      // Not on onerror — that's the path a manual tap-to-interrupt takes
-      // (see startListening's cancel() call), which already starts its own
-      // fresh listening session; auto-restarting there too would race it.
-      if (handsFreeRef.current) startListening();
-    };
-    utterance.onerror = () => setSphereState('idle');
-    window.speechSynthesis.speak(utterance);
-  }
-
-  useEffect(() => {
-    const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
-    if (SR) {
-      setSpeechSupported(true);
-      const recognition = new SR();
-      // continuous = false lets the browser auto-detect when the user stops
-      // talking and end the recognition on its own — that's what makes this
-      // "push to talk, then it just sends" instead of "push to talk, then
-      // stop, then send."
-      recognition.continuous = false;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
-
-      recognition.onresult = (event) => {
-        let transcript = '';
-        for (let i = 0; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-        transcriptRef.current = transcript;
-        setInput(transcript);
-      };
-      recognition.onend = () => {
-        clearInterval(amplitudeIntervalRef.current);
-        setRecording(false);
-        setAmplitude(0);
-        const finalText = transcriptRef.current.trim();
-        transcriptRef.current = '';
-        if (finalText) {
-          sendMessageRef.current(null, finalText);
-        } else {
-          setSphereState('idle');
-        }
-      };
-      recognition.onerror = () => {
-        clearInterval(amplitudeIntervalRef.current);
-        setRecording(false);
-        setAmplitude(0);
-        setSphereState('idle');
-      };
-      recognitionRef.current = recognition;
-    }
-  }, [setAmplitude, setSphereState]);
+  const voice = useVoiceConversation({
+    setInput,
+    onFinalTranscript: (text) => sendMessage(null, text),
+  });
 
   useEffect(() => {
     if (!initialConvId) return;
@@ -225,58 +83,18 @@ function TalkPageInner() {
     hasScrolledOnceRef.current = false;
   }, [conversationId]);
 
-  // Function declaration (not const) so it's hoisted — speak()'s onend
-  // handler, defined earlier in the component body, calls this too.
-  function startListening() {
-    if (!speechSupported || recordingRef.current) return;
-    // Doubles as tap-to-interrupt: if the sphere is mid-reply, this cuts it
-    // off immediately and starts listening for what you actually want to say.
-    window.speechSynthesis?.cancel();
-    transcriptRef.current = '';
-    setInput('');
-    setSphereState('listening');
-    setRecording(true);
-    recognitionRef.current.start();
-    amplitudeIntervalRef.current = setInterval(() => {
-      setAmplitude(0.3 + Math.random() * 0.7);
-    }, 180);
-  }
-
-  function toggleRecording() {
-    if (!speechSupported) return;
-    if (recording) {
-      // Manual cancel — stop now. onend will fire; if nothing was
-      // transcribed yet it just goes back to idle instead of sending.
-      recognitionRef.current.stop();
-      return;
-    }
-    startListening();
-  }
-
-  function toggleHandsFree() {
-    const next = !handsFreeMode;
-    setHandsFreeMode(next);
-    localStorage.setItem('controlblock:handsFreeMode', String(next));
-    if (next && sphereState === 'idle' && !recording) startListening();
-  }
-
   async function sendMessage(e, overrideText) {
     e?.preventDefault();
     const text = (overrideText ?? input).trim();
     if (!text || sending) return;
 
-    if (recording) {
-      recognitionRef.current?.stop();
-      clearInterval(amplitudeIntervalRef.current);
-      setRecording(false);
-    }
+    voice.stopRecordingImmediately();
 
     const now = new Date().toISOString();
     setMessages((prev) => [...prev, { role: 'user', content: text, emotion: null, created_at: now }]);
     setInput('');
     setSending(true);
     setSphereState('thinking');
-    setAmplitude(0);
     setError('');
 
     try {
@@ -306,7 +124,7 @@ function TalkPageInner() {
         router.replace(`/talk?c=${data.conversationId}`);
       }
 
-      speak(data.reply);
+      voice.speak(data.reply);
     } catch (err) {
       setError(err.message);
       setSphereState('idle');
@@ -314,8 +132,6 @@ function TalkPageInner() {
       setSending(false);
     }
   }
-
-  sendMessageRef.current = sendMessage;
 
   function handleKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -348,7 +164,7 @@ function TalkPageInner() {
             <span>Growth plan updated</span>
           </div>
         )}
-        {speechSynthesisAvailable && (
+        {voice.speechSynthesisAvailable && (
           <button
             type="button"
             onClick={() => setShowVoiceSettings((v) => !v)}
@@ -361,56 +177,33 @@ function TalkPageInner() {
             <span>Voice</span>
           </button>
         )}
-        {speechSupported && speechSynthesisAvailable && (
+        {voice.speechSupported && voice.speechSynthesisAvailable && (
           <button
             type="button"
-            onClick={toggleHandsFree}
+            onClick={() => voice.toggleHandsFree(sphereState)}
             title={
-              handsFreeMode
+              voice.handsFreeMode
                 ? 'Hands-free is on — Sphere listens again automatically after replying'
                 : 'Turn on hands-free conversation — no need to tap the mic each turn'
             }
             className={`glass-panel flex items-center gap-2 rounded-full px-4 py-2 text-xs transition ${
-              handsFreeMode ? 'text-neuron' : 'text-slate-300 hover:text-neuron'
+              voice.handsFreeMode ? 'text-neuron' : 'text-slate-300 hover:text-neuron'
             }`}
           >
-            <span>{handsFreeMode ? '🎧' : '🎙️'}</span>
+            <span>{voice.handsFreeMode ? '🎧' : '🎙️'}</span>
             <span>Hands-free</span>
           </button>
         )}
       </div>
 
-      {showVoiceSettings && speechSynthesisAvailable && (
-        <div className="px-4 pt-2 lg:flex lg:justify-end lg:px-8">
-          <div className="glass-panel mx-auto flex w-full max-w-sm flex-col gap-3 rounded-2xl px-4 py-3 text-xs lg:mx-0">
-            <label className="flex flex-col gap-1">
-              <span className="text-slate-400">Voice</span>
-              <select
-                value={selectedVoiceKey}
-                onChange={handleVoiceChange}
-                className="rounded-lg border border-white/10 bg-panel/80 px-2 py-1.5 text-slate-200 outline-none focus:border-neuron2/50"
-              >
-                {voices.map((v) => (
-                  <option key={voiceKey(v)} value={voiceKey(v)}>
-                    {v.name} ({v.lang})
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-slate-400">Speed — {speechRate.toFixed(2)}x</span>
-              <input
-                type="range"
-                min="0.5"
-                max="1.75"
-                step="0.05"
-                value={speechRate}
-                onChange={handleRateChange}
-                className="accent-neuron2"
-              />
-            </label>
-          </div>
-        </div>
+      {showVoiceSettings && voice.speechSynthesisAvailable && (
+        <VoiceSettingsPanel
+          voices={voice.voices}
+          selectedVoiceKey={voice.selectedVoiceKey}
+          onVoiceChange={voice.handleVoiceChange}
+          speechRate={voice.speechRate}
+          onRateChange={voice.handleRateChange}
+        />
       )}
 
       <div className="relative flex h-[42vh] shrink-0 items-center justify-center lg:h-[48vh]">
@@ -455,24 +248,24 @@ function TalkPageInner() {
         {error && <p className="px-1 text-sm text-alert">{error}</p>}
 
         <form onSubmit={sendMessage} className="flex items-end gap-3 py-6">
-          {speechSupported && (
+          {voice.speechSupported && (
             <button
               type="button"
-              onClick={toggleRecording}
+              onClick={voice.toggleRecording}
               title={
-                recording
+                voice.recording
                   ? 'Tap to cancel'
                   : sphereState === 'speaking'
                     ? 'Tap to interrupt and talk'
                     : 'Tap and talk — sends automatically when you stop'
               }
               className={`relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border text-xl transition ${
-                recording
+                voice.recording
                   ? 'border-alert/50 bg-alert/10 text-alert shadow-[0_0_25px_rgba(251,113,133,0.35)]'
                   : 'border-neuron2/40 bg-gradient-to-br from-neuron/25 via-neuron2/15 to-neuron2/30 text-neuron shadow-glow hover:from-neuron/35 hover:to-neuron2/40'
               }`}
             >
-              {recording ? (
+              {voice.recording ? (
                 <span className="flex items-end gap-0.5">
                   {[0, 1, 2, 3].map((i) => (
                     <span
@@ -492,7 +285,7 @@ function TalkPageInner() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            placeholder={recording ? 'Listening…' : "What's on your mind..."}
+            placeholder={voice.recording ? 'Listening…' : "What's on your mind..."}
             className="glass-panel flex-1 resize-none rounded-2xl px-4 py-3 text-sm text-slate-100 outline-none focus:border-neuron2/50"
           />
           <button
