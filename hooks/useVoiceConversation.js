@@ -11,6 +11,24 @@ export function voiceKey(v) {
   return `${v.name}::${v.lang}`;
 }
 
+// SpeechSynthesisUtterance has no SSML/pause support — the engine just reads
+// the whole string straight through, which is most of what makes TTS sound
+// robotic (not the voice itself, the total lack of breathing room). Speaking
+// one sentence/clause at a time as separate utterances, with a real pause
+// between each, is the standard portable way around that since it doesn't
+// depend on the engine caring about punctuation at all.
+function chunkForSpeech(text) {
+  const matches = text.match(/[^.!?,;:]+[.!?,;:]*/g);
+  return (matches || [text]).map((s) => s.trim()).filter(Boolean);
+}
+
+function pauseAfterChunk(chunk) {
+  const last = chunk.slice(-1);
+  if (last === '.' || last === '!' || last === '?') return 420;
+  if (last === ',' || last === ';' || last === ':') return 180;
+  return 60;
+}
+
 // Encapsulates mic input (SpeechRecognition), spoken replies
 // (SpeechSynthesis), voice/speed preferences, and hands-free
 // conversation mode for the Talk page. The page still owns `input`
@@ -32,6 +50,9 @@ export default function useVoiceConversation({ setInput, onFinalTranscript }) {
   const amplitudeIntervalRef = useRef(null);
   const transcriptRef = useRef('');
   const voicesRef = useRef([]);
+  const speakQueueRef = useRef([]);
+  const speakIndexRef = useRef(0);
+  const pauseTimeoutRef = useRef(null);
   const onFinalTranscriptRef = useRef(onFinalTranscript);
   onFinalTranscriptRef.current = onFinalTranscript;
   // Mirrors state for use inside SpeechRecognition/SpeechSynthesis callbacks,
@@ -73,7 +94,10 @@ export default function useVoiceConversation({ setInput, onFinalTranscript }) {
     };
     loadVoices();
     window.speechSynthesis.onvoiceschanged = loadVoices;
-    return () => window.speechSynthesis.cancel();
+    return () => {
+      window.speechSynthesis.cancel();
+      clearTimeout(pauseTimeoutRef.current);
+    };
   }, []);
 
   function handleVoiceChange(e) {
@@ -88,16 +112,27 @@ export default function useVoiceConversation({ setInput, onFinalTranscript }) {
     localStorage.setItem('controlblock:speechRate', String(next));
   }
 
-  function speak(text) {
-    if (typeof window === 'undefined' || !window.speechSynthesis) {
-      // No speech synthesis available — still flash "speaking" briefly so
-      // the sphere doesn't stay stuck on "thinking" forever.
-      setSphereState('speaking');
-      setTimeout(() => setSphereState('idle'), 1800);
+  // Cancels whatever's currently playing AND any pending inter-chunk pause —
+  // without clearing the timeout too, an interrupt that lands during a pause
+  // (nothing actively speaking, so cancel() has nothing to stop) would let
+  // the queued next chunk fire anyway, resuming speech right after you'd
+  // just told it to stop and listen.
+  function stopSpeaking() {
+    window.speechSynthesis?.cancel();
+    clearTimeout(pauseTimeoutRef.current);
+  }
+
+  function playNextChunk() {
+    const chunks = speakQueueRef.current;
+    const i = speakIndexRef.current;
+    if (i >= chunks.length) {
+      setSphereState('idle');
+      // Hands-free mode: pick the mic back up on its own once the reply
+      // finishes, so the conversation keeps going without another tap.
+      if (handsFreeRef.current) startListening();
       return;
     }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance = new SpeechSynthesisUtterance(chunks[i]);
     const list = voicesRef.current.length ? voicesRef.current : window.speechSynthesis.getVoices();
     const selected = list.find((v) => voiceKey(v) === selectedVoiceKey);
     if (selected) {
@@ -109,16 +144,32 @@ export default function useVoiceConversation({ setInput, onFinalTranscript }) {
     utterance.rate = speechRate;
     utterance.onstart = () => setSphereState('speaking');
     utterance.onend = () => {
-      setSphereState('idle');
-      // Hands-free mode: pick the mic back up on its own once the reply
-      // finishes, so the conversation keeps going without another tap.
-      // Not on onerror — that's the path a manual tap-to-interrupt takes
-      // (see startListening's cancel() call), which already starts its own
-      // fresh listening session; auto-restarting there too would race it.
-      if (handsFreeRef.current) startListening();
+      const finishedChunk = chunks[speakIndexRef.current];
+      speakIndexRef.current += 1;
+      if (speakIndexRef.current >= chunks.length) {
+        playNextChunk(); // no chunks left — finalizes immediately, no extra delay
+      } else {
+        pauseTimeoutRef.current = setTimeout(playNextChunk, pauseAfterChunk(finishedChunk));
+      }
     };
+    // Manual tap-to-interrupt cancels mid-chunk, which fires onerror (not
+    // onend) — that's what keeps it from continuing on to the next chunk.
     utterance.onerror = () => setSphereState('idle');
     window.speechSynthesis.speak(utterance);
+  }
+
+  function speak(text) {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      // No speech synthesis available — still flash "speaking" briefly so
+      // the sphere doesn't stay stuck on "thinking" forever.
+      setSphereState('speaking');
+      setTimeout(() => setSphereState('idle'), 1800);
+      return;
+    }
+    stopSpeaking();
+    speakQueueRef.current = chunkForSpeech(text);
+    speakIndexRef.current = 0;
+    playNextChunk();
   }
 
   useEffect(() => {
@@ -169,9 +220,10 @@ export default function useVoiceConversation({ setInput, onFinalTranscript }) {
   // handler, defined earlier, calls this too.
   function startListening() {
     if (!speechSupported || recordingRef.current) return;
-    // Doubles as tap-to-interrupt: if the sphere is mid-reply, this cuts it
-    // off immediately and starts listening for what you actually want to say.
-    window.speechSynthesis?.cancel();
+    // Doubles as tap-to-interrupt: if the sphere is mid-reply (or paused
+    // between chunks — see stopSpeaking), this cuts it off immediately and
+    // starts listening for what you actually want to say.
+    stopSpeaking();
     transcriptRef.current = '';
     setInput('');
     setSphereState('listening');
